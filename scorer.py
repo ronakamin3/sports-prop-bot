@@ -1,63 +1,31 @@
+from __future__ import annotations
 from typing import List, Dict
+from probability import expected_value
 
-def score_prop(prop: Dict) -> float:
-    odds = prop.get("odds")
-    market = (prop.get("market") or "").lower()
-
-    if not isinstance(odds, int):
+def score_pick(pick: Dict) -> float:
+    # prioritize EV, then big payout
+    ev = pick.get("ev")
+    odds = pick.get("target_odds")
+    if not isinstance(ev, float):
         return -999
-
-    score = 0.0
-
-    # Prefer plus money
-    if odds > 0:
-        score += 2.0
-    else:
-        score += 0.2  # keep some anchors available
-
-    # Sweet spot for "big but not insane"
-    if 200 <= odds <= 900:
-        score += 3.0
-    elif odds > 900:
-        score += 1.0  # lotto
-
-    # Volatility / upside bonuses by market
-    if "anytime_td" in market:
-        score += 1.2
-    if "batter_home_runs" in market:
-        score += 1.2
-    if "player_goal_scorer_anytime" in market:
-        score += 1.2
-    if "player_shots_on_goal" in market:
-        score += 0.8
-    if "player_threes" in market:
-        score += 0.8
-    if "player_points_rebounds_assists" in market:
+    score = ev * 100  # EV dominates
+    if isinstance(odds, int) and odds > 0:
         score += 0.5
-    if "pitcher_strikeouts" in market:
-        score += 0.6
-
+        if 200 <= odds <= 900:
+            score += 0.5
     return score
 
-def select_top(props: List[Dict], n: int) -> List[Dict]:
-    ranked = sorted(props, key=score_prop, reverse=True)
-    # remove junk/empty
-    ranked = [p for p in ranked if score_prop(p) > 0]
+def select_top(picks: List[Dict], n: int) -> List[Dict]:
+    ranked = sorted(picks, key=score_pick, reverse=True)
     return ranked[:n]
 
-def build_parlays(props: List[Dict]) -> List[List[Dict]]:
+def build_parlays(picks: List[Dict]) -> List[List[Dict]]:
     """
-    Build 2-leg "hittable parlay ideas" from the watchlist.
-    Cross-game only (avoids correlation confusion).
+    2-leg cross-game parlays from approved picks.
+    Hittable = one anchor-ish leg + one upside leg, or two moderate plus legs.
     """
-    anchors = [
-        p for p in props
-        if isinstance(p.get("odds"), int) and -200 <= p["odds"] <= -110
-    ]
-    upsides = [
-        p for p in props
-        if isinstance(p.get("odds"), int) and 100 <= p["odds"] <= 350
-    ]
+    anchors = [p for p in picks if isinstance(p.get("target_odds"), int) and -200 <= p["target_odds"] <= -110]
+    upsides = [p for p in picks if isinstance(p.get("target_odds"), int) and 100 <= p["target_odds"] <= 350]
 
     def different_game(a: Dict, b: Dict) -> bool:
         return a.get("event") != b.get("event")
@@ -83,28 +51,3 @@ def build_parlays(props: List[Dict]) -> List[List[Dict]]:
             break
 
     return parlays
-
-def reason_tags(prop: Dict) -> str:
-    odds = prop.get("odds")
-    market = (prop.get("market") or "").lower()
-    tags = []
-
-    if isinstance(odds, int) and odds > 0:
-        tags.append("PLUS MONEY")
-    if isinstance(odds, int) and 200 <= odds <= 900:
-        tags.append("HIGH PAYOUT")
-
-    if "anytime_td" in market:
-        tags.append("TD UPSIDE")
-    if "batter_home_runs" in market:
-        tags.append("HR UPSIDE")
-    if "player_goal_scorer_anytime" in market:
-        tags.append("GOAL UPSIDE")
-    if "player_shots_on_goal" in market:
-        tags.append("SHOTS VOLUME")
-    if "player_threes" in market:
-        tags.append("3PT VARIANCE")
-    if "pitcher_strikeouts" in market:
-        tags.append("K VOLUME")
-
-    return ", ".join(tags) if tags else "WATCH"
