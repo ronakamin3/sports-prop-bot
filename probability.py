@@ -22,6 +22,9 @@ def kelly_fraction(p: float, odds: int) -> float:
     return max(0.0, f)
 
 def consensus_probability_from_odds(odds_list: list[int]) -> float | None:
+    """
+    Robust consensus p_model using median implied probability.
+    """
     vals = []
     for o in odds_list:
         if isinstance(o, int):
