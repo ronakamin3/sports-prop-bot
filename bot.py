@@ -9,24 +9,22 @@ from config import (
     DAILY_PROP_COUNT, COOLDOWN_MINUTES,
     STRICT_MODE, EV_THRESHOLD, KELLY_CAP,
     TARGET_BOOKS, NHL_REQUIRE_CONFIRMED_GOALIE,
-    SUPER_MAX_MODE, MIN_LONGSHOT_ODDS, MAX_LONGSHOT_ODDS,
-    MIN_BOOKS_FOR_CONSENSUS,
+    MIN_BOOKS_FOR_CONSENSUS, MIN_ODDS, MAX_ODDS,
 )
 from odds_provider import get_events, get_event_odds_multi_book
 from storage import init_db, was_sent_recently, mark_sent
 from gates import quality_gates
 from probability import consensus_probability_from_odds, expected_value, kelly_fraction
-from scorer import select_top, build_parlays_super_max
+from scorer import select_top
 
 
-# Odds API markets (adjust later if you want different props)
 SPORT_MARKETS = {
     "basketball_nba": "player_points,player_threes,player_points_rebounds_assists",
-    "americanfootball_nfl": "player_anytime_td,player_reception_yds,player_receptions,player_pass_yds",
-    "baseball_mlb": "batter_home_runs,batter_hits,batter_total_bases,pitcher_strikeouts",
-    "icehockey_nhl": "player_goals,player_points,player_shots_on_goal,player_goal_scorer_anytime",
-    "soccer_epl": "player_goal_scorer_anytime,player_shots,player_shots_on_target,player_assists",
-    "soccer_usa_mls": "player_goal_scorer_anytime,player_shots,player_shots_on_target,player_assists",
+    "americanfootball_nfl": "player_receptions,player_reception_yds,player_pass_yds,player_anytime_td",
+    "baseball_mlb": "pitcher_strikeouts,batter_hits,batter_total_bases,batter_home_runs",
+    "icehockey_nhl": "player_shots_on_goal,player_points,player_goals,player_goal_scorer_anytime",
+    "soccer_epl": "player_shots,player_shots_on_target,player_goal_scorer_anytime,player_assists",
+    "soccer_usa_mls": "player_shots,player_shots_on_target,player_goal_scorer_anytime,player_assists",
 }
 
 def send_telegram(msg: str):
@@ -42,19 +40,11 @@ def pick_target_odds(prices_by_book: dict[str, int]) -> tuple[int | None, str | 
     return None, None
 
 def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
-    """
-    Build candidate outcomes keyed by (market, player, side, line) and collect odds by bookmaker.
-    Then:
-      - target_odds from FanDuel (robust keys)
-      - p_model from consensus implied prob using ALL books (fallback)
-        but requires MIN_BOOKS_FOR_CONSENSUS to avoid single-book traps.
-    """
     sport = event.get("sport_key")
     away = event.get("away_team", "")
     home = event.get("home_team", "")
     event_name = f"{away} @ {home}".strip(" @")
 
-    # key -> {book: odds}
     by_key: dict[tuple, dict[str, int]] = {}
 
     for bm in odds_data.get("bookmakers", []):
@@ -82,7 +72,6 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
         all_odds = [v for v in prices_by_book.values() if isinstance(v, int)]
         books_count = len(all_odds)
 
-        # Require at least N books to compute consensus probability (process quality)
         p_model = None
         if books_count >= MIN_BOOKS_FOR_CONSENSUS:
             p_model = consensus_probability_from_odds(all_odds)
@@ -98,7 +87,7 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
             "target_book_used": target_book_used,
             "p_model": p_model,
             "books_count": books_count,
-            "goalie_confirmed": None,  # placeholder
+            "goalie_confirmed": None,
         })
 
     return candidates
@@ -139,11 +128,17 @@ def main():
         if not gate.ok:
             continue
 
-        # SUPER MAX filter: only longshots
-        if SUPER_MAX_MODE:
-            o = c.get("target_odds")
-            if not isinstance(o, int) or o < MIN_LONGSHOT_ODDS or o > MAX_LONGSHOT_ODDS:
-                continue
+        o = c.get("target_odds")
+        if not isinstance(o, int):
+            continue
+
+        # Accuracy odds window
+        if o < MIN_ODDS or o > MAX_ODDS:
+            continue
+
+        # Require strong consensus coverage
+        if c.get("books_count", 0) < MIN_BOOKS_FOR_CONSENSUS:
+            continue
 
         ev = expected_value(c["p_model"], c["target_odds"])
         if ev < EV_THRESHOLD:
@@ -156,20 +151,19 @@ def main():
         approved.append(c)
 
     if not approved:
-        # Quiet by design (process quality)
+        # Quiet by design (accuracy mode)
         return
 
     top = select_top(approved, DAILY_PROP_COUNT)
-    parlays = build_parlays_super_max(top, MIN_LONGSHOT_ODDS, MAX_LONGSHOT_ODDS)
 
     eastern = tz.gettz("America/New_York")
     now = datetime.now(tz=eastern).strftime("%a %b %d %I:%M %p ET")
 
     lines = [
-        f"💣 SUPER MAX HITS — {', '.join(TARGET_BOOKS).upper()}",
+        "✅ ACCURATE MODE — +EV (Process Quality)",
         f"{now}",
         f"API calls: events={total_event_calls}, event-odds={total_odds_calls}",
-        f"Filters: Longshot≥{MIN_LONGSHOT_ODDS:+d}, EV≥{EV_THRESHOLD:.2f}, KellyCap={KELLY_CAP:.3f}, Books≥{MIN_BOOKS_FOR_CONSENSUS}",
+        f"Filters: EV≥{EV_THRESHOLD:.2f}, Books≥{MIN_BOOKS_FOR_CONSENSUS}, OddsRange[{MIN_ODDS},{MAX_ODDS}], KellyCap={KELLY_CAP:.3f}",
         "",
     ]
 
@@ -190,17 +184,7 @@ def main():
     if not sent_any:
         return
 
-    if parlays:
-        lines.append("🎯 Lotto Parlay Ideas (cross-game)")
-        lines.append("(Built only from approved SUPER MAX picks)")
-        lines.append("")
-        for i, parlay in enumerate(parlays, 1):
-            lines.append(f"Parlay {i} ({len(parlay)} legs):")
-            for leg in parlay:
-                lines.append(f"- {format_pick(leg)}")
-            lines.append("")
-
-    lines.append("⚠️ Longshots: low hit-rate, big payout. Process quality enforced (consensus+EV+bankroll cap).")
+    lines.append("🔎 Not guarantees — guaranteed process quality (multi-book consensus +EV + bankroll cap).")
     send_telegram("\n".join(lines))
 
 if __name__ == "__main__":
