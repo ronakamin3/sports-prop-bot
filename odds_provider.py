@@ -11,9 +11,7 @@ def get_events(sport: str):
 
 def get_event_odds_multi_book(sport: str, event_id: str, markets: str):
     """
-    Fetch odds for multiple books (US region). We'll later:
-    - extract FanDuel outcome price
-    - compute consensus implied probability from other books
+    Pull multiple bookmakers in one request so we can compute consensus.
     """
     url = f"{BASE_URL}/sports/{sport}/events/{event_id}/odds"
     params = {
@@ -21,7 +19,6 @@ def get_event_odds_multi_book(sport: str, event_id: str, markets: str):
         "regions": REGION,
         "markets": markets,
         "oddsFormat": "american",
-        # intentionally NOT filtering bookmakers
     }
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
