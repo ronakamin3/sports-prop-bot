@@ -1,32 +1,67 @@
-from dataclasses import dataclass
-from typing import List
+from typing import List, Dict
 
-@dataclass
-class GateResult:
-    ok: bool
-    reasons: List[str]
+def score_pick(p: Dict) -> float:
+    """
+    SUPER MAX: prioritize bigger payout odds, then EV, then books coverage.
+    """
+    odds = p.get("target_odds")
+    ev = p.get("ev", 0.0)
+    books = p.get("books_count", 0)
 
-def quality_gates(candidate: dict, strict_mode: bool, nhl_require_goalie: bool) -> GateResult:
-    reasons: List[str] = []
+    if not isinstance(odds, int):
+        return -999
 
-    needed = ["sport", "event", "market", "player", "side", "target_odds", "p_model", "books_count"]
-    missing = [k for k in needed if candidate.get(k) is None]
-    if missing:
-        reasons.append(f"Missing fields: {', '.join(missing)}")
+    score = 0.0
 
-    if not isinstance(candidate.get("target_odds"), int):
-        reasons.append("Target book odds missing/invalid")
+    # bigger odds => "super max"
+    if odds > 0:
+        score += min(odds / 100.0, 30.0)  # cap effect
 
-    p = candidate.get("p_model")
-    if not isinstance(p, float) or not (0.01 <= p <= 0.99):
-        reasons.append("Model probability invalid")
+    # still reward EV
+    if isinstance(ev, float):
+        score += ev * 50.0
 
-    if nhl_require_goalie and candidate.get("sport") == "icehockey_nhl":
-        if candidate.get("goalie_confirmed") is not True:
-            reasons.append("Goalie not confirmed (gate enabled)")
+    # more books = more confidence in consensus
+    score += min(books, 10) * 0.5
 
-    if strict_mode:
-        return GateResult(ok=(len(reasons) == 0), reasons=reasons)
+    return score
 
-    hard_blocks = [r for r in reasons if "Target book odds" in r or "Model probability" in r]
-    return GateResult(ok=(len(hard_blocks) == 0), reasons=reasons)
+def select_top(picks: List[Dict], n: int) -> List[Dict]:
+    ranked = sorted(picks, key=score_pick, reverse=True)
+    return ranked[:n]
+
+def build_parlays_super_max(picks: List[Dict], min_odds: int, max_odds: int) -> List[List[Dict]]:
+    """
+    Build 2-leg and 3-leg lotto parlays from longshots.
+    Cross-game only.
+    """
+    longshots = [
+        p for p in picks
+        if isinstance(p.get("target_odds"), int) and min_odds <= p["target_odds"] <= max_odds
+    ]
+
+    def different_game(a: Dict, b: Dict) -> bool:
+        return a.get("event") != b.get("event")
+
+    parlays: List[List[Dict]] = []
+
+    # 2-leg super max
+    for i in range(len(longshots)):
+        for j in range(i + 1, len(longshots)):
+            if different_game(longshots[i], longshots[j]):
+                parlays.append([longshots[i], longshots[j]])
+                break
+        if len(parlays) >= 1:
+            break
+
+    # 3-leg mega (optional, very low hit rate)
+    if len(longshots) >= 3:
+        for i in range(len(longshots)):
+            for j in range(i + 1, len(longshots)):
+                for k in range(j + 1, len(longshots)):
+                    a, b, c = longshots[i], longshots[j], longshots[k]
+                    if a["event"] != b["event"] and a["event"] != c["event"] and b["event"] != c["event"]:
+                        parlays.append([a, b, c])
+                        return parlays
+
+    return parlays
