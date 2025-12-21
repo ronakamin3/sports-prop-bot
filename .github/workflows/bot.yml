@@ -3,7 +3,6 @@ name: sports-prop-bot
 on:
   schedule:
     - cron: "0 14 * * *"   # 9 AM ET
-    - cron: "0 22 * * *"   # 5 PM ET
   workflow_dispatch:
 
 jobs:
@@ -11,12 +10,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore bot state cache
+        uses: actions/cache@v4
+        with:
+          path: bot.db
+          key: botdb-${{ github.ref }}
+          restore-keys: |
+            botdb-
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - run: pip install -r requirements.txt
+
       - run: python bot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+
+          # Controls (can change without code edits)
+          EVENTS_PER_SPORT: "1"
+          TARGET_BOOKS: "fanduel,fanduel_us"
+
+          STRICT_MODE: "true"
+          EV_THRESHOLD: "0.00"
+          KELLY_CAP: "0.005"
+
+          SUPER_MAX_MODE: "true"
+          MIN_LONGSHOT_ODDS: "600"
+          MAX_LONGSHOT_ODDS: "2500"
+          MIN_BOOKS_FOR_CONSENSUS: "2"
