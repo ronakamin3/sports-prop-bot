@@ -2,23 +2,24 @@ from __future__ import annotations
 import requests
 from datetime import datetime
 from dateutil import tz
-from statistics import median
 
 from config import (
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
     SPORTS, EVENTS_PER_SPORT,
     DAILY_PROP_COUNT, COOLDOWN_MINUTES,
     STRICT_MODE, EV_THRESHOLD, KELLY_CAP,
-    TARGET_BOOK, NHL_REQUIRE_CONFIRMED_GOALIE
+    TARGET_BOOKS, NHL_REQUIRE_CONFIRMED_GOALIE,
+    SUPER_MAX_MODE, MIN_LONGSHOT_ODDS, MAX_LONGSHOT_ODDS,
+    MIN_BOOKS_FOR_CONSENSUS,
 )
 from odds_provider import get_events, get_event_odds_multi_book
 from storage import init_db, was_sent_recently, mark_sent
 from gates import quality_gates
-from probability import consensus_probability, expected_value, kelly_fraction
-from scorer import select_top, build_parlays
+from probability import consensus_probability_from_odds, expected_value, kelly_fraction
+from scorer import select_top, build_parlays_super_max
 
 
-# Market keys (The Odds API)
+# Odds API markets (adjust later if you want different props)
 SPORT_MARKETS = {
     "basketball_nba": "player_points,player_threes,player_points_rebounds_assists",
     "americanfootball_nfl": "player_anytime_td,player_reception_yds,player_receptions,player_pass_yds",
@@ -30,20 +31,23 @@ SPORT_MARKETS = {
 
 def send_telegram(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": msg,
-        "disable_web_page_preview": True,
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "disable_web_page_preview": True}
     r = requests.post(url, json=payload, timeout=20)
     r.raise_for_status()
 
-def normalize_to_candidates(event: dict, odds_data: dict, target_book: str) -> list[dict]:
+def pick_target_odds(prices_by_book: dict[str, int]) -> tuple[int | None, str | None]:
+    for tb in TARGET_BOOKS:
+        if tb in prices_by_book:
+            return prices_by_book[tb], tb
+    return None, None
+
+def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
     """
-    Build candidate props keyed by (market, player, side, line) and collect prices by bookmaker.
-    We'll compute:
-      - target_odds (FanDuel)
-      - consensus p_model (median implied prob across OTHER books)
+    Build candidate outcomes keyed by (market, player, side, line) and collect odds by bookmaker.
+    Then:
+      - target_odds from FanDuel (robust keys)
+      - p_model from consensus implied prob using ALL books (fallback)
+        but requires MIN_BOOKS_FOR_CONSENSUS to avoid single-book traps.
     """
     sport = event.get("sport_key")
     away = event.get("away_team", "")
@@ -58,14 +62,10 @@ def normalize_to_candidates(event: dict, odds_data: dict, target_book: str) -> l
         for m in bm.get("markets", []):
             market_key = m.get("key")
             for o in m.get("outcomes", []):
-                # For player props, many APIs use:
-                # - o["description"] = player
-                # - o["name"] = "Over"/"Under" or the selection
                 player = o.get("description") or o.get("name")
                 side = o.get("name")  # Over/Under/Yes/No etc.
                 line = o.get("point")  # may be None (e.g., anytime TD)
                 price = o.get("price")
-
                 if not player or not market_key or not side:
                     continue
                 if not isinstance(price, int):
@@ -76,13 +76,16 @@ def normalize_to_candidates(event: dict, odds_data: dict, target_book: str) -> l
                 by_key[k][bm_key] = price
 
     candidates: list[dict] = []
-
     for (market_key, player, side, line), prices_by_book in by_key.items():
-        target_odds = prices_by_book.get(target_book)
+        target_odds, target_book_used = pick_target_odds(prices_by_book)
 
-        # Consensus probability from OTHER books (exclude target book)
-        other_odds = [v for bk, v in prices_by_book.items() if bk != target_book and isinstance(v, int)]
-        p_model = consensus_probability(other_odds)
+        all_odds = [v for v in prices_by_book.values() if isinstance(v, int)]
+        books_count = len(all_odds)
+
+        # Require at least N books to compute consensus probability (process quality)
+        p_model = None
+        if books_count >= MIN_BOOKS_FOR_CONSENSUS:
+            p_model = consensus_probability_from_odds(all_odds)
 
         candidates.append({
             "sport": sport,
@@ -92,9 +95,10 @@ def normalize_to_candidates(event: dict, odds_data: dict, target_book: str) -> l
             "side": side,
             "line": line,
             "target_odds": target_odds,
+            "target_book_used": target_book_used,
             "p_model": p_model,
-            "books_count": len(prices_by_book),
-            "goalie_confirmed": None,  # placeholder for future NHL feed
+            "books_count": books_count,
+            "goalie_confirmed": None,  # placeholder
         })
 
     return candidates
@@ -102,11 +106,11 @@ def normalize_to_candidates(event: dict, odds_data: dict, target_book: str) -> l
 def format_pick(p: dict) -> str:
     odds = p["target_odds"]
     line = p.get("line")
-    base = f"{p['player']} — {p['market']} — {p['side']}"
+    s = f"{p['player']} — {p['market']} — {p['side']}"
     if line is not None:
-        base += f" {line}"
-    base += f" ({odds:+d})"
-    return base
+        s += f" {line}"
+    s += f" ({odds:+d})"
+    return s
 
 def main():
     init_db()
@@ -126,7 +130,7 @@ def main():
         for event in events[:EVENTS_PER_SPORT]:
             odds_data = get_event_odds_multi_book(sport, event["id"], markets)
             total_odds_calls += 1
-            all_candidates.extend(normalize_to_candidates(event, odds_data, TARGET_BOOK))
+            all_candidates.extend(normalize_to_candidates(event, odds_data))
 
     approved: list[dict] = []
 
@@ -135,37 +139,41 @@ def main():
         if not gate.ok:
             continue
 
+        # SUPER MAX filter: only longshots
+        if SUPER_MAX_MODE:
+            o = c.get("target_odds")
+            if not isinstance(o, int) or o < MIN_LONGSHOT_ODDS or o > MAX_LONGSHOT_ODDS:
+                continue
+
         ev = expected_value(c["p_model"], c["target_odds"])
         if ev < EV_THRESHOLD:
             continue
 
         k = kelly_fraction(c["p_model"], c["target_odds"])
-        k_capped = min(k, KELLY_CAP)
-
         c["ev"] = ev
-        c["kelly_frac"] = k_capped
+        c["kelly_frac"] = min(k, KELLY_CAP)
+
         approved.append(c)
 
     if not approved:
-        # nothing qualifies; stay quiet (process quality)
+        # Quiet by design (process quality)
         return
 
     top = select_top(approved, DAILY_PROP_COUNT)
-    parlays = build_parlays(top)
+    parlays = build_parlays_super_max(top, MIN_LONGSHOT_ODDS, MAX_LONGSHOT_ODDS)
 
     eastern = tz.gettz("America/New_York")
     now = datetime.now(tz=eastern).strftime("%a %b %d %I:%M %p ET")
 
     lines = [
-        f"✅ +EV PICKS (Process-Quality) — {TARGET_BOOK.title()}",
+        f"💣 SUPER MAX HITS — {', '.join(TARGET_BOOKS).upper()}",
         f"{now}",
-        f"API calls this run: events={total_event_calls}, event-odds={total_odds_calls}",
-        f"Filters: EV≥{EV_THRESHOLD:.2f}, KellyCap={KELLY_CAP:.3f}, Strict={STRICT_MODE}",
+        f"API calls: events={total_event_calls}, event-odds={total_odds_calls}",
+        f"Filters: Longshot≥{MIN_LONGSHOT_ODDS:+d}, EV≥{EV_THRESHOLD:.2f}, KellyCap={KELLY_CAP:.3f}, Books≥{MIN_BOOKS_FOR_CONSENSUS}",
         "",
     ]
 
     sent_any = False
-
     for p in top:
         key = f"{p['sport']}|{p['event']}|{p['market']}|{p['player']}|{p['side']}|{p.get('line')}|{p['target_odds']}"
         if was_sent_recently(key, COOLDOWN_MINUTES):
@@ -175,24 +183,24 @@ def main():
 
         lines.append(f"• {format_pick(p)}")
         lines.append(f"  {p['event']}")
-        lines.append(f"  p_model={p['p_model']:.3f} | EV=${p['ev']:.3f}/$1 | Stake~{p['kelly_frac']*100:.2f}% bankroll")
-        lines.append(f"  Books used={p.get('books_count', 0)} (consensus excludes {TARGET_BOOK})")
+        lines.append(f"  Book={p.get('target_book_used')} | p_model={p['p_model']:.3f} | EV=${p['ev']:.3f}/$1 | Stake~{p['kelly_frac']*100:.2f}% bankroll")
+        lines.append(f"  Books used={p.get('books_count', 0)}")
         lines.append("")
 
     if not sent_any:
         return
 
     if parlays:
-        lines.append("🎯 Hittable Parlay Ideas (2-leg, cross-game)")
-        lines.append("(Built only from approved +EV picks)")
+        lines.append("🎯 Lotto Parlay Ideas (cross-game)")
+        lines.append("(Built only from approved SUPER MAX picks)")
         lines.append("")
         for i, parlay in enumerate(parlays, 1):
-            lines.append(f"Parlay {i}:")
+            lines.append(f"Parlay {i} ({len(parlay)} legs):")
             for leg in parlay:
                 lines.append(f"- {format_pick(leg)}")
             lines.append("")
 
-    lines.append("🔎 Not guarantees — guaranteed process quality (data gates + EV + bankroll cap).")
+    lines.append("⚠️ Longshots: low hit-rate, big payout. Process quality enforced (consensus+EV+bankroll cap).")
     send_telegram("\n".join(lines))
 
 if __name__ == "__main__":
