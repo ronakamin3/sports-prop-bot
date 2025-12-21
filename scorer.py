@@ -1,53 +1,67 @@
-from __future__ import annotations
 from typing import List, Dict
-from probability import expected_value
 
-def score_pick(pick: Dict) -> float:
-    # prioritize EV, then big payout
-    ev = pick.get("ev")
-    odds = pick.get("target_odds")
-    if not isinstance(ev, float):
+def score_pick(p: Dict) -> float:
+    """
+    SUPER MAX: prioritize bigger payout odds, then EV, then books coverage.
+    """
+    odds = p.get("target_odds")
+    ev = p.get("ev", 0.0)
+    books = p.get("books_count", 0)
+
+    if not isinstance(odds, int):
         return -999
-    score = ev * 100  # EV dominates
-    if isinstance(odds, int) and odds > 0:
-        score += 0.5
-        if 200 <= odds <= 900:
-            score += 0.5
+
+    score = 0.0
+
+    # bigger odds => "super max"
+    if odds > 0:
+        score += min(odds / 100.0, 30.0)  # cap effect
+
+    # still reward EV
+    if isinstance(ev, float):
+        score += ev * 50.0
+
+    # more books = more confidence in consensus
+    score += min(books, 10) * 0.5
+
     return score
 
 def select_top(picks: List[Dict], n: int) -> List[Dict]:
     ranked = sorted(picks, key=score_pick, reverse=True)
     return ranked[:n]
 
-def build_parlays(picks: List[Dict]) -> List[List[Dict]]:
+def build_parlays_super_max(picks: List[Dict], min_odds: int, max_odds: int) -> List[List[Dict]]:
     """
-    2-leg cross-game parlays from approved picks.
-    Hittable = one anchor-ish leg + one upside leg, or two moderate plus legs.
+    Build 2-leg and 3-leg lotto parlays from longshots.
+    Cross-game only.
     """
-    anchors = [p for p in picks if isinstance(p.get("target_odds"), int) and -200 <= p["target_odds"] <= -110]
-    upsides = [p for p in picks if isinstance(p.get("target_odds"), int) and 100 <= p["target_odds"] <= 350]
+    longshots = [
+        p for p in picks
+        if isinstance(p.get("target_odds"), int) and min_odds <= p["target_odds"] <= max_odds
+    ]
 
     def different_game(a: Dict, b: Dict) -> bool:
         return a.get("event") != b.get("event")
 
     parlays: List[List[Dict]] = []
 
-    # Parlay 1: anchor + upside
-    for a in anchors:
-        for b in upsides:
-            if different_game(a, b):
-                parlays.append([a, b])
+    # 2-leg super max
+    for i in range(len(longshots)):
+        for j in range(i + 1, len(longshots)):
+            if different_game(longshots[i], longshots[j]):
+                parlays.append([longshots[i], longshots[j]])
                 break
         if len(parlays) >= 1:
             break
 
-    # Parlay 2: two upsides
-    for i in range(len(upsides)):
-        for j in range(i + 1, len(upsides)):
-            if different_game(upsides[i], upsides[j]):
-                parlays.append([upsides[i], upsides[j]])
-                break
-        if len(parlays) >= 2:
-            break
+    # 3-leg mega (optional, very low hit rate)
+    if len(longshots) >= 3:
+        for i in range(len(longshots)):
+            for j in range(i + 1, len(longshots)):
+                for k in range(j + 1, len(longshots)):
+                    a, b, c = longshots[i], longshots[j], longshots[k]
+                    if a["event"] != b["event"] and a["event"] != c["event"] and b["event"] != c["event"]:
+                        parlays.append([a, b, c])
+                        return parlays
 
     return parlays
