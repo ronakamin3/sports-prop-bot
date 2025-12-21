@@ -1,5 +1,3 @@
-from __future__ import annotations
-from dataclasses import dataclass
 from statistics import median
 
 def implied_prob_american(odds: int) -> float:
@@ -23,11 +21,7 @@ def kelly_fraction(p: float, odds: int) -> float:
     f = (b * p - q) / b
     return max(0.0, f)
 
-def consensus_probability(odds_list: list[int]) -> float | None:
-    """
-    Convert multiple books' odds into a robust consensus probability.
-    Uses median implied probability (simple + stable).
-    """
+def consensus_probability_from_odds(odds_list: list[int]) -> float | None:
     vals = []
     for o in odds_list:
         if isinstance(o, int):
