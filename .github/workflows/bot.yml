@@ -31,9 +31,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
-          # Accuracy mode controls
+          # ✅ Switch to DraftKings
+          TARGET_BOOKS: "draftkings"
+
+          # Accuracy-mode controls
           EVENTS_PER_SPORT: "1"
-          TARGET_BOOKS: "fanduel,fanduel_us"
           STRICT_MODE: "true"
           EV_THRESHOLD: "0.02"
           KELLY_CAP: "0.01"
