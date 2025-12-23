@@ -1,7 +1,7 @@
 from __future__ import annotations
 import requests
-from datetime import datetime
-from dateutil import tz
+from datetime import datetime, timezone
+from dateutil import tz, parser
 
 from config import (
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
@@ -15,7 +15,7 @@ from odds_provider import get_events, get_event_odds_multi_book
 from storage import init_db, was_sent_recently, mark_sent
 from gates import quality_gates
 from probability import consensus_probability_from_odds, expected_value, kelly_fraction
-from scorer import select_top
+from scorer import select_top, build_parlays
 
 
 SPORT_MARKETS = {
@@ -32,6 +32,20 @@ def send_telegram(msg: str):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "disable_web_page_preview": True}
     r = requests.post(url, json=payload, timeout=20)
     r.raise_for_status()
+
+def is_today_et(commence_time: str) -> bool:
+    """
+    Keep only games occurring today in America/New_York.
+    commence_time is ISO8601 (typically UTC).
+    """
+    eastern = tz.gettz("America/New_York")
+    today_et = datetime.now(tz=eastern).date()
+
+    dt = parser.isoparse(commence_time)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    return dt.astimezone(eastern).date() == today_et
 
 def pick_target_odds(prices_by_book: dict[str, int]) -> tuple[int | None, str | None]:
     for tb in TARGET_BOOKS:
@@ -107,6 +121,7 @@ def main():
     all_candidates: list[dict] = []
     total_event_calls = 0
     total_odds_calls = 0
+    total_today_events_used = 0
 
     for sport in SPORTS:
         markets = SPORT_MARKETS.get(sport, "")
@@ -116,7 +131,10 @@ def main():
         events = get_events(sport)
         total_event_calls += 1
 
-        for event in events[:EVENTS_PER_SPORT]:
+        today_events = [e for e in events if e.get("commence_time") and is_today_et(e["commence_time"])]
+        total_today_events_used += min(len(today_events), EVENTS_PER_SPORT)
+
+        for event in today_events[:EVENTS_PER_SPORT]:
             odds_data = get_event_odds_multi_book(sport, event["id"], markets)
             total_odds_calls += 1
             all_candidates.extend(normalize_to_candidates(event, odds_data))
@@ -155,14 +173,15 @@ def main():
         return
 
     top = select_top(approved, DAILY_PROP_COUNT)
+    parlays = build_parlays(top, max_parlays=2)
 
     eastern = tz.gettz("America/New_York")
     now = datetime.now(tz=eastern).strftime("%a %b %d %I:%M %p ET")
 
     lines = [
-        "✅ ACCURATE MODE — +EV (Process Quality)",
+        "✅ ACCURATE MODE — Today’s Games Only (+EV, Process Quality)",
         f"{now}",
-        f"API calls: events={total_event_calls}, event-odds={total_odds_calls}",
+        f"API calls: events={total_event_calls}, event-odds={total_odds_calls} (today events used={total_today_events_used})",
         f"Filters: EV≥{EV_THRESHOLD:.2f}, Books≥{MIN_BOOKS_FOR_CONSENSUS}, OddsRange[{MIN_ODDS},{MAX_ODDS}], KellyCap={KELLY_CAP:.3f}",
         "",
     ]
@@ -184,7 +203,17 @@ def main():
     if not sent_any:
         return
 
-    lines.append("🔎 Not guarantees — guaranteed process quality (multi-book consensus +EV + bankroll cap).")
+    if parlays:
+        lines.append("🎯 Parlay Builder (2-leg, cross-game)")
+        lines.append("(Built only from today’s approved +EV picks)")
+        lines.append("")
+        for i, parlay in enumerate(parlays, 1):
+            lines.append(f"Parlay {i}:")
+            for leg in parlay:
+                lines.append(f"- {format_pick(leg)}")
+            lines.append("")
+
+    lines.append("🔎 Not guarantees — guaranteed process quality (today-only + multi-book consensus +EV + bankroll cap).")
     send_telegram("\n".join(lines))
 
 if __name__ == "__main__":
