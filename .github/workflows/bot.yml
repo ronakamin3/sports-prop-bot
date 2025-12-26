@@ -2,7 +2,8 @@ name: sports-prop-bot
 
 on:
   schedule:
-    - cron: "0 14 * * *"   # ✅ 9:00 AM Eastern Time (UTC)
+    - cron: "0 14 * * *"     # 9:00 AM ET
+    - cron: "30 21 * * *"    # 4:30 PM ET
   workflow_dispatch:
 
 jobs:
@@ -15,9 +16,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bot.db
-          key: botdb-${{ github.ref }}
+          key: botdb-${{ github.repository }}-${{ github.ref_name }}
           restore-keys: |
-            botdb-
+            botdb-${{ github.repository }}-
 
       - uses: actions/setup-python@v5
         with:
@@ -34,12 +35,12 @@ jobs:
           # DraftKings target
           TARGET_BOOKS: "draftkings"
 
-          # Accuracy-mode controls
+          # Accuracy / No-Vig Mode
           EVENTS_PER_SPORT: "1"
           STRICT_MODE: "true"
           EV_THRESHOLD: "0.02"
-          KELLY_CAP: "0.01"
           MIN_BOOKS_FOR_CONSENSUS: "4"
-          MIN_ODDS: "-200"
-          MAX_ODDS: "200"
-          DAILY_PROP_COUNT: "5"
+          MIN_ODDS: "-180"
+          MAX_ODDS: "150"
+          DAILY_PROP_COUNT: "3"
+          KELLY_CAP: "0.01"
