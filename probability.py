@@ -6,7 +6,6 @@ def implied_prob_american(odds: int) -> float:
     return (-odds) / ((-odds) + 100.0)
 
 def profit_per_1(odds: int) -> float:
-    # profit excluding stake, per $1
     if odds > 0:
         return odds / 100.0
     return 100.0 / (-odds)
@@ -21,14 +20,18 @@ def kelly_fraction(p: float, odds: int) -> float:
     f = (b * p - q) / b
     return max(0.0, f)
 
-def consensus_probability_from_odds(odds_list: list[int]) -> float | None:
-    """
-    Robust consensus p_model using median implied probability.
-    """
-    vals = []
-    for o in odds_list:
-        if isinstance(o, int):
-            vals.append(implied_prob_american(o))
+def consensus_probability_from_probs(probs: list[float]) -> float | None:
+    vals = [p for p in probs if isinstance(p, float) and 0.001 < p < 0.999]
     if not vals:
         return None
     return float(median(vals))
+
+def fair_prob_two_way_no_vig(p_a: float, p_b: float) -> float:
+    """
+    Remove vig by normalizing the two implied probabilities so they sum to 1.
+    Returns fair probability for outcome A.
+    """
+    s = p_a + p_b
+    if s <= 0:
+        return p_a
+    return p_a / s
