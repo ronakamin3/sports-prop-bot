@@ -39,19 +39,20 @@ def send_telegram(msg: str):
 def is_today_et(commence_time: str) -> bool:
     eastern = tz.gettz("America/New_York")
     today_et = datetime.now(tz=eastern).date()
-
     dt = parser.isoparse(commence_time)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(eastern).date() == today_et
 
-def pick_target_odds(prices_by_book: dict[str, dict]) -> tuple[int | None, str | None]:
+def is_blocked_reception_over(c: dict) -> bool:
     """
-    prices_by_book[bk] holds dict like {"Over": int, "Under": int, "Yes": int, ...}
-    Return DK (or target) odds for the 'side' we’re evaluating later.
-    We pick later per-side; this helper is not used anymore for selection.
+    Remove NFL reception OVERS entirely (high variance; common "miss by 1").
     """
-    return None, None
+    return (
+        c.get("sport") == "americanfootball_nfl"
+        and c.get("market") == "player_receptions"
+        and c.get("side") == "Over"
+    )
 
 def format_pick(p: dict) -> str:
     odds = p["target_odds"]
@@ -62,11 +63,20 @@ def format_pick(p: dict) -> str:
     s += f" ({odds:+d})"
     return s
 
+def why_line(p: dict) -> str:
+    """
+    One-line explanation for why a pick qualified.
+    """
+    dk_odds = p["target_odds"]
+    p_model = p["p_model"]
+    p_implied = implied_prob_american(dk_odds)
+    edge = p_model - p_implied
+    return (
+        f"WHY: p_fair={p_model:.3f} vs DK_implied={p_implied:.3f} (edge={edge:+.3f}), "
+        f"EV=${p['ev']:.3f}/$1, books={p['books_count']}, Kelly~{p['kelly_frac']*100:.2f}%"
+    )
+
 def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
-    """
-    Build per-prop candidates with no-vig consensus when Over/Under exists at same line.
-    Keyed by (market, player, line).
-    """
     sport = event.get("sport_key")
     away = event.get("away_team", "")
     home = event.get("home_team", "")
@@ -98,18 +108,15 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
     candidates: list[dict] = []
 
     for (market_key, player, line), book_sides in by_key.items():
-        # Identify if this looks like a two-way O/U market
-        is_ou = any("Over" in sides or "Under" in sides for sides in book_sides.values())
+        # O/U detection
+        is_ou = any(("Over" in sides and "Under" in sides) for sides in book_sides.values())
 
-        # Build consensus fair probs per side
         fair_probs_over: list[float] = []
         fair_probs_under: list[float] = []
-
-        # Also keep fallback implied probs for non-O/U markets
         implied_probs_by_side: dict[str, list[float]] = {}
 
+        # For O/U: only count books where both sides exist at same line (stronger)
         for bk, sides in book_sides.items():
-            # For O/U: compute no-vig if both exist
             if "Over" in sides and "Under" in sides and isinstance(sides["Over"], int) and isinstance(sides["Under"], int):
                 p_over = implied_prob_american(sides["Over"])
                 p_under = implied_prob_american(sides["Under"])
@@ -118,14 +125,14 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
                 fair_probs_over.append(fair_over)
                 fair_probs_under.append(fair_under)
 
-            # For any market: store implied for each available side (fallback)
             for side_name, odd in sides.items():
                 if isinstance(odd, int):
                     implied_probs_by_side.setdefault(side_name, []).append(implied_prob_american(odd))
 
-        # Build one candidate per side we might bet
-        for side in ["Over", "Under"] if is_ou else list(implied_probs_by_side.keys()):
-            # Determine target odds from DK/target books for this side
+        sides_to_emit = ["Over", "Under"] if is_ou else list(implied_probs_by_side.keys())
+
+        for side in sides_to_emit:
+            # Target odds from DK (or your target list)
             target_odds = None
             target_book_used = None
             for tb in TARGET_BOOKS:
@@ -134,11 +141,10 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
                     target_book_used = tb
                     break
 
-            # Consensus p_model
             if is_ou and side in ("Over", "Under"):
                 probs = fair_probs_over if side == "Over" else fair_probs_under
                 p_model = consensus_probability_from_probs(probs)
-                books_count = len(probs)  # number of books with both sides (stronger)
+                books_count = len(probs)
             else:
                 probs = implied_probs_by_side.get(side, [])
                 p_model = consensus_probability_from_probs(probs)
@@ -168,6 +174,9 @@ def main():
     total_odds_calls = 0
     total_today_events_used = 0
 
+    # Debug counters (helps tune)
+    blocked_gate = blocked_target_missing = blocked_odds_window = blocked_books = blocked_ev = blocked_reception_over = 0
+
     for sport in SPORTS:
         markets = SPORT_MARKETS.get(sport, "")
         if not markets:
@@ -187,24 +196,31 @@ def main():
     approved: list[dict] = []
 
     for c in all_candidates:
+        if is_blocked_reception_over(c):
+            blocked_reception_over += 1
+            continue
+
         gate = quality_gates(c, STRICT_MODE, NHL_REQUIRE_CONFIRMED_GOALIE)
         if not gate.ok:
+            blocked_gate += 1
             continue
 
         o = c.get("target_odds")
         if not isinstance(o, int):
+            blocked_target_missing += 1
             continue
 
-        # Accuracy odds window
         if o < MIN_ODDS or o > MAX_ODDS:
+            blocked_odds_window += 1
             continue
 
-        # Require strong consensus coverage (now “books_count” means quality books for that side)
         if c.get("books_count", 0) < MIN_BOOKS_FOR_CONSENSUS:
+            blocked_books += 1
             continue
 
         ev = expected_value(c["p_model"], c["target_odds"])
         if ev < EV_THRESHOLD:
+            blocked_ev += 1
             continue
 
         k = kelly_fraction(c["p_model"], c["target_odds"])
@@ -217,13 +233,13 @@ def main():
     now = datetime.now(tz=eastern).strftime("%a %b %d %I:%M %p ET")
 
     if not approved:
-        # Send a status message so you know it ran + what happened
         msg = "\n".join([
             "ℹ️ ACCURATE MODE — Today’s Games Only (No-Vig)",
             f"{now}",
-            f"No qualified picks today.",
+            "No qualified picks today.",
             f"API calls: events={total_event_calls}, event-odds={total_odds_calls} (today events used={total_today_events_used})",
             f"Filters: EV≥{EV_THRESHOLD:.2f}, Books≥{MIN_BOOKS_FOR_CONSENSUS}, OddsRange[{MIN_ODDS},{MAX_ODDS}]",
+            f"Blocked: gate={blocked_gate}, target_missing={blocked_target_missing}, odds_window={blocked_odds_window}, books={blocked_books}, ev={blocked_ev}, rec_over_blocked={blocked_reception_over}",
         ])
         send_telegram(msg)
         return
@@ -232,10 +248,11 @@ def main():
     parlays = build_parlays(top, max_parlays=2) if len(top) >= 4 else []
 
     lines = [
-        "✅ ACCURATE MODE — Today’s Games Only (+EV, No-Vig Consensus)",
+        "✅ ACCURATE MODE — Today’s Games Only (+EV, No-Vig) — DK Target",
         f"{now}",
         f"API calls: events={total_event_calls}, event-odds={total_odds_calls} (today events used={total_today_events_used})",
         f"Filters: EV≥{EV_THRESHOLD:.2f}, Books≥{MIN_BOOKS_FOR_CONSENSUS}, OddsRange[{MIN_ODDS},{MAX_ODDS}], KellyCap={KELLY_CAP:.3f}",
+        f"Blocked: gate={blocked_gate}, target_missing={blocked_target_missing}, odds_window={blocked_odds_window}, books={blocked_books}, ev={blocked_ev}, rec_over_blocked={blocked_reception_over}",
         "",
     ]
 
@@ -249,24 +266,25 @@ def main():
 
         lines.append(f"• {format_pick(p)}")
         lines.append(f"  {p['event']}")
-        lines.append(f"  Book={p.get('target_book_used')} | p_model={p['p_model']:.3f} | EV=${p['ev']:.3f}/$1 | Stake~{p['kelly_frac']*100:.2f}% bankroll")
-        lines.append(f"  Books used={p.get('books_count', 0)}")
+        lines.append(f"  Book={p.get('target_book_used')} | books={p.get('books_count', 0)}")
+        lines.append(f"  {why_line(p)}")
         lines.append("")
 
     if not sent_any:
         return
 
     if parlays:
-        lines.append("🎯 Parlay Builder (2-leg, cross-game)")
-        lines.append("(Only from today’s approved +EV picks)")
+        lines.append("🎯 Parlay Builder (2-leg, cross-game) + EV Estimate")
+        lines.append("(Independence estimate; DK parlay pricing may differ. Use as guidance.)")
         lines.append("")
-        for i, parlay in enumerate(parlays, 1):
-            lines.append(f"Parlay {i}:")
-            for leg in parlay:
+        for i, par in enumerate(parlays, 1):
+            legs = par["legs"]
+            lines.append(f"Parlay {i}: p≈{par['p_parlay']:.3f} | dec≈{par['dec_odds']:.2f} | EV≈${par['ev']:.3f}/$1")
+            for leg in legs:
                 lines.append(f"- {format_pick(leg)}")
             lines.append("")
 
-    lines.append("🔎 Not guarantees — stronger process quality (no-vig + multi-book consensus +EV + bankroll cap).")
+    lines.append("🔎 Not guarantees — improved quality: no-vig fair probs + blocked NFL reception OVERS + clear WHY.")
     send_telegram("\n".join(lines))
 
 if __name__ == "__main__":
