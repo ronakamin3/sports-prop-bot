@@ -1,32 +1,65 @@
 from dataclasses import dataclass
-from typing import List
 
 @dataclass
 class GateResult:
     ok: bool
-    reasons: List[str]
+    reason: str = ""
 
-def quality_gates(candidate: dict, strict_mode: bool, nhl_require_goalie: bool) -> GateResult:
-    reasons: List[str] = []
+# Markets we allow by default (keep tight for accuracy)
+ALLOWED_MARKETS = {
+    # NBA
+    "player_points",
+    "player_threes",
+    "player_points_rebounds_assists",
 
-    needed = ["sport", "event", "market", "player", "side", "target_odds", "p_model", "books_count"]
-    missing = [k for k in needed if candidate.get(k) is None]
-    if missing:
-        reasons.append(f"Missing fields: {', '.join(missing)}")
+    # NFL
+    "player_receptions",
+    "player_reception_yds",
+    "player_pass_yds",
+    "player_anytime_td",
 
-    if not isinstance(candidate.get("target_odds"), int):
-        reasons.append("Target book odds missing/invalid")
+    # MLB
+    "pitcher_strikeouts",
+    "batter_hits",
+    "batter_total_bases",
+    "batter_home_runs",
 
-    p = candidate.get("p_model")
-    if not isinstance(p, float) or not (0.01 <= p <= 0.99):
-        reasons.append("Model probability invalid")
+    # NHL
+    "player_shots_on_goal",
+    "player_points",
+    "player_goals",
+    "player_goal_scorer_anytime",
 
-    if nhl_require_goalie and candidate.get("sport") == "icehockey_nhl":
-        if candidate.get("goalie_confirmed") is not True:
-            reasons.append("Goalie not confirmed (gate enabled)")
+    # Soccer
+    "player_shots",
+    "player_shots_on_target",
+    "player_goal_scorer_anytime",
+    "player_assists",
+}
 
-    if strict_mode:
-        return GateResult(ok=(len(reasons) == 0), reasons=reasons)
+def quality_gates(c: dict, strict_mode: bool, nhl_require_confirmed_goalie: bool) -> GateResult:
+    """
+    Keep this gate about data integrity, not "trying to predict the sport".
+    The EV/no-vig + multi-book checks already handle pricing quality.
+    """
 
-    hard_blocks = [r for r in reasons if "Target book odds" in r or "Model probability" in r]
-    return GateResult(ok=(len(hard_blocks) == 0), reasons=reasons)
+    # Must have sport/event/market/player/side
+    for k in ("sport", "event", "market", "player", "side"):
+        if not c.get(k):
+            return GateResult(False, f"missing_{k}")
+
+    market = c.get("market")
+    if strict_mode and market not in ALLOWED_MARKETS:
+        return GateResult(False, "market_not_allowed")
+
+    # For O/U props, a numeric line is required
+    if c.get("side") in ("Over", "Under"):
+        if c.get("line") is None:
+            return GateResult(False, "missing_line")
+
+    # NHL goalie gate (only if you actually implement goalie confirmation elsewhere)
+    if nhl_require_confirmed_goalie and c.get("sport") == "icehockey_nhl":
+        if not c.get("goalie_confirmed"):
+            return GateResult(False, "goalie_unconfirmed")
+
+    return GateResult(True, "ok")
