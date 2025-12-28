@@ -4,10 +4,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
-REGION = os.getenv("REGION", "us")
-
-# DraftKings target
-TARGET_BOOKS = [x.strip().lower() for x in os.getenv("TARGET_BOOKS", "draftkings").split(",")]
+# Books you will actually bet at (bot will choose best EV among these)
+TARGET_BOOKS = [x.strip().lower() for x in os.getenv("TARGET_BOOKS", "draftkings,fanduel").split(",")]
 
 SPORTS = [
     "americanfootball_nfl",
@@ -26,22 +24,22 @@ EV_THRESHOLD = float(os.getenv("EV_THRESHOLD", "0.02"))
 KELLY_CAP = float(os.getenv("KELLY_CAP", "0.01"))
 MIN_BOOKS_FOR_CONSENSUS = int(os.getenv("MIN_BOOKS_FOR_CONSENSUS", "4"))
 
-# Odds discipline (accuracy-first)
+# Odds discipline
 MIN_ODDS = int(os.getenv("MIN_ODDS", "-180"))
 MAX_ODDS = int(os.getenv("MAX_ODDS", "150"))
 
 # Output limits
-MAX_SINGLES = int(os.getenv("MAX_SINGLES", "2"))          # top singles sent
+MAX_SINGLES = int(os.getenv("MAX_SINGLES", "2"))
 COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "180"))
 
-# Parlay settings (guardrails)
+# Parlay toggles
 ENABLE_PARLAYS = os.getenv("ENABLE_PARLAYS", "true").lower() == "true"
 ENABLE_SGP = os.getenv("ENABLE_SGP", "true").lower() == "true"
 ENABLE_LOTTERY = os.getenv("ENABLE_LOTTERY", "true").lower() == "true"
 
-# Cap parlay payout (decimal odds caps). Keeps “lotto” from turning into nonsense.
-SGP_DECIMAL_CAP = float(os.getenv("SGP_DECIMAL_CAP", "6.0"))       # ~ +500
-LOTTERY_DECIMAL_CAP = float(os.getenv("LOTTERY_DECIMAL_CAP", "10.0"))  # ~ +900
+# Parlay caps (decimal odds)
+SGP_DECIMAL_CAP = float(os.getenv("SGP_DECIMAL_CAP", "6.0"))          # ~ +500
+LOTTERY_DECIMAL_CAP = float(os.getenv("LOTTERY_DECIMAL_CAP", "10.0")) # ~ +900
 
-# Optional NHL goalie gate placeholder
+# Optional NHL goalie gate placeholder (leave false unless you implemented it in gates.py)
 NHL_REQUIRE_CONFIRMED_GOALIE = os.getenv("NHL_REQUIRE_CONFIRMED_GOALIE", "false").lower() == "true"
