@@ -37,8 +37,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
-          # Sportsbooks / Target
-          TARGET_BOOKS: "draftkings"
+          # Use BOTH books; bot picks best EV between them
+          TARGET_BOOKS: "draftkings,fanduel"
 
           # Coverage (keep low to stay under request limits)
           EVENTS_PER_SPORT: "1"
@@ -55,11 +55,11 @@ jobs:
           MAX_SINGLES: "2"
           COOLDOWN_MINUTES: "180"
 
-          # Parlays (optional but enabled)
-          ENABLE_PARLAYS: "true"   # Best Builder (2-leg cross-game from singles)
-          ENABLE_SGP: "true"       # Controlled 2-leg same-game
-          ENABLE_LOTTERY: "true"   # 3-leg cross-game "lottery"
+          # Parlays
+          ENABLE_PARLAYS: "true"
+          ENABLE_SGP: "true"
+          ENABLE_LOTTERY: "true"
 
           # Guardrails (decimal odds caps)
-          SGP_DECIMAL_CAP: "6.0"       # ~ +500 cap
-          LOTTERY_DECIMAL_CAP: "10.0"  # ~ +900 cap
+          SGP_DECIMAL_CAP: "6.0"        # ~ +500 cap
+          LOTTERY_DECIMAL_CAP: "10.0"   # ~ +900 cap
