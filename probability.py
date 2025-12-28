@@ -16,6 +16,7 @@ def profit_per_1(odds: int) -> float:
     return 100.0 / (-odds)
 
 def expected_value(p: float, odds: int) -> float:
+    # EV per $1 stake
     prof = profit_per_1(odds)
     return p * prof - (1 - p) * 1.0
 
@@ -44,7 +45,12 @@ def parlay_decimal_odds(odds_list: list[int]) -> float:
     return d
 
 def parlay_ev(p_list: list[float], odds_list: list[int]) -> float:
-    # Independence approximation (we label this clearly)
+    """
+    Independence approximation (we label this in Telegram):
+    p_parlay = Π p_i
+    decimal = Π decimal(odds_i)
+    EV per $1 = p_parlay*(decimal-1) - (1-p_parlay)
+    """
     p_parlay = 1.0
     for p in p_list:
         p_parlay *= p
