@@ -4,8 +4,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
-# Books you will actually bet at (bot will choose best EV among these)
-TARGET_BOOKS = [x.strip().lower() for x in os.getenv("TARGET_BOOKS", "draftkings,fanduel").split(",")]
+# Required by odds_provider.py
+REGION = os.getenv("REGION", "us")
+
+# Books you will actually bet at (bot picks best EV between them)
+TARGET_BOOKS = [
+    x.strip().lower()
+    for x in os.getenv("TARGET_BOOKS", "draftkings,fanduel").split(",")
+]
 
 SPORTS = [
     "americanfootball_nfl",
@@ -41,5 +47,7 @@ ENABLE_LOTTERY = os.getenv("ENABLE_LOTTERY", "true").lower() == "true"
 SGP_DECIMAL_CAP = float(os.getenv("SGP_DECIMAL_CAP", "6.0"))          # ~ +500
 LOTTERY_DECIMAL_CAP = float(os.getenv("LOTTERY_DECIMAL_CAP", "10.0")) # ~ +900
 
-# Optional NHL goalie gate placeholder (leave false unless you implemented it in gates.py)
-NHL_REQUIRE_CONFIRMED_GOALIE = os.getenv("NHL_REQUIRE_CONFIRMED_GOALIE", "false").lower() == "true"
+# Optional NHL goalie gate placeholder
+NHL_REQUIRE_CONFIRMED_GOALIE = os.getenv(
+    "NHL_REQUIRE_CONFIRMED_GOALIE", "false"
+).lower() == "true"
