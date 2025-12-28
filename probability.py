@@ -6,11 +6,6 @@ def implied_prob_american(odds: int) -> float:
     return (-odds) / ((-odds) + 100.0)
 
 def american_to_decimal(odds: int) -> float:
-    """
-    Convert American odds to decimal odds (including stake).
-    +150 -> 2.50
-    -120 -> 1.8333...
-    """
     if odds > 0:
         return 1.0 + (odds / 100.0)
     return 1.0 + (100.0 / (-odds))
@@ -21,7 +16,6 @@ def profit_per_1(odds: int) -> float:
     return 100.0 / (-odds)
 
 def expected_value(p: float, odds: int) -> float:
-    # EV per $1 stake
     prof = profit_per_1(odds)
     return p * prof - (1 - p) * 1.0
 
@@ -38,10 +32,6 @@ def consensus_probability_from_probs(probs: list[float]) -> float | None:
     return float(median(vals))
 
 def fair_prob_two_way_no_vig(p_a: float, p_b: float) -> float:
-    """
-    Remove vig by normalizing two implied probabilities so they sum to 1.
-    Returns fair probability for outcome A.
-    """
     s = p_a + p_b
     if s <= 0:
         return p_a
@@ -54,12 +44,7 @@ def parlay_decimal_odds(odds_list: list[int]) -> float:
     return d
 
 def parlay_ev(p_list: list[float], odds_list: list[int]) -> float:
-    """
-    Independence approximation:
-    p_parlay = Π p_i
-    decimal_odds = Π decimal(odds_i)
-    EV per $1 = p_parlay*(decimal_odds-1) - (1-p_parlay)
-    """
+    # Independence approximation (we label this clearly)
     p_parlay = 1.0
     for p in p_list:
         p_parlay *= p
