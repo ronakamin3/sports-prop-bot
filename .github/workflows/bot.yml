@@ -2,8 +2,8 @@ name: sports-prop-bot
 
 on:
   schedule:
-    - cron: "0 14 * * *"     # 9:00 AM ET (14:00 UTC)
-    - cron: "30 21 * * *"    # 4:30 PM ET (21:30 UTC)
+    - cron: "0 14 * * *"     # 9:00 AM ET
+    - cron: "30 21 * * *"    # 4:30 PM ET
   workflow_dispatch:
 
 jobs:
@@ -11,10 +11,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Restore bot state cache (keeps cooldown + history)
+      - name: Restore bot state
         uses: actions/cache@v4
         with:
           path: bot.db
@@ -22,8 +21,7 @@ jobs:
           restore-keys: |
             botdb-${{ github.repository }}-
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -37,13 +35,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
-          # Use BOTH books; bot picks best EV between them
-          TARGET_BOOKS: "draftkings,fanduel"
+          # ALL books enabled
+          TARGET_BOOKS: "draftkings,fanduel,fanatics"
 
-          # Coverage (keep low to stay under request limits)
           EVENTS_PER_SPORT: "1"
 
-          # Accuracy-first filters
           STRICT_MODE: "true"
           EV_THRESHOLD: "0.02"
           MIN_BOOKS_FOR_CONSENSUS: "4"
@@ -51,15 +47,12 @@ jobs:
           MAX_ODDS: "150"
           KELLY_CAP: "0.01"
 
-          # Output sizing
           MAX_SINGLES: "2"
           COOLDOWN_MINUTES: "180"
 
-          # Parlays
           ENABLE_PARLAYS: "true"
           ENABLE_SGP: "true"
           ENABLE_LOTTERY: "true"
 
-          # Guardrails (decimal odds caps)
-          SGP_DECIMAL_CAP: "6.0"        # ~ +500 cap
-          LOTTERY_DECIMAL_CAP: "10.0"   # ~ +900 cap
+          SGP_DECIMAL_CAP: "6.0"
+          LOTTERY_DECIMAL_CAP: "10.0"
