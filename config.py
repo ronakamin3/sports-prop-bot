@@ -6,11 +6,12 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
 REGION = os.getenv("REGION", "us")
 
+# ADD BETMGM HERE
 TARGET_BOOKS = [
     x.strip().lower()
     for x in os.getenv(
         "TARGET_BOOKS",
-        "draftkings,fanduel,fanatics"
+        "draftkings,fanduel,fanatics,betmgm"
     ).split(",")
 ]
 
@@ -26,9 +27,9 @@ SPORTS = [
 EVENTS_PER_SPORT = int(os.getenv("EVENTS_PER_SPORT", "1"))
 
 STRICT_MODE = os.getenv("STRICT_MODE", "true").lower() == "true"
-EV_THRESHOLD = float(os.getenv("EV_THRESHOLD", "0.02"))
+EV_THRESHOLD = float(os.getenv("EV_THRESHOLD", "0.01"))
 KELLY_CAP = float(os.getenv("KELLY_CAP", "0.01"))
-MIN_BOOKS_FOR_CONSENSUS = int(os.getenv("MIN_BOOKS_FOR_CONSENSUS", "4"))
+MIN_BOOKS_FOR_CONSENSUS = int(os.getenv("MIN_BOOKS_FOR_CONSENSUS", "3"))
 
 MIN_ODDS = int(os.getenv("MIN_ODDS", "-180"))
 MAX_ODDS = int(os.getenv("MAX_ODDS", "150"))
