@@ -35,14 +35,15 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
-          # ALL books enabled
-          TARGET_BOOKS: "draftkings,fanduel,fanatics"
+          # ADD BETMGM
+          TARGET_BOOKS: "draftkings,fanduel,fanatics,betmgm"
 
           EVENTS_PER_SPORT: "1"
 
           STRICT_MODE: "true"
-          EV_THRESHOLD: "0.02"
-          MIN_BOOKS_FOR_CONSENSUS: "4"
+          EV_THRESHOLD: "0.01"
+          MIN_BOOKS_FOR_CONSENSUS: "3"
+
           MIN_ODDS: "-180"
           MAX_ODDS: "150"
           KELLY_CAP: "0.01"
