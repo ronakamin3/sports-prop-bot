@@ -1,3 +1,4 @@
+# .github/workflows/bot.yml
 name: sports-prop-bot
 
 on:
@@ -9,7 +10,6 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -35,25 +35,31 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
-          # ADD BETMGM
+          # Books
           TARGET_BOOKS: "draftkings,fanduel,fanatics,betmgm"
 
+          # Schedule/coverage
           EVENTS_PER_SPORT: "1"
 
+          # Accuracy gates
           STRICT_MODE: "true"
           EV_THRESHOLD: "0.01"
           MIN_BOOKS_FOR_CONSENSUS: "3"
-
           MIN_ODDS: "-180"
           MAX_ODDS: "150"
           KELLY_CAP: "0.01"
 
+          # ✅ "Actually good" SHARP filters
+          MIN_EDGE: "0.015"
+          MIN_EV_DOLLARS: "0.02"
+
+          # Output limits
           MAX_SINGLES: "2"
           COOLDOWN_MINUTES: "180"
 
+          # Parlays
           ENABLE_PARLAYS: "true"
           ENABLE_SGP: "true"
           ENABLE_LOTTERY: "true"
-
           SGP_DECIMAL_CAP: "6.0"
           LOTTERY_DECIMAL_CAP: "10.0"
