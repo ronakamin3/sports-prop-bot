@@ -1,3 +1,4 @@
+# config.py
 import os
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -6,7 +7,6 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
 REGION = os.getenv("REGION", "us")
 
-# ADD BETMGM HERE
 TARGET_BOOKS = [
     x.strip().lower()
     for x in os.getenv(
@@ -47,3 +47,7 @@ LOTTERY_DECIMAL_CAP = float(os.getenv("LOTTERY_DECIMAL_CAP", "10.0"))
 NHL_REQUIRE_CONFIRMED_GOALIE = os.getenv(
     "NHL_REQUIRE_CONFIRMED_GOALIE", "false"
 ).lower() == "true"
+
+# ✅ "Actually good" SHARP filters
+MIN_EDGE = float(os.getenv("MIN_EDGE", "0.015"))             # min (p_fair - implied)
+MIN_EV_DOLLARS = float(os.getenv("MIN_EV_DOLLARS", "0.02"))  # min EV per $1
