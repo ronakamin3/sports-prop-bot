@@ -1,4 +1,3 @@
-# .github/workflows/bot.yml
 name: sports-prop-bot
 
 on:
@@ -35,31 +34,38 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
-          # Books
+          REGION: "us"
+
+          # Books (coverage)
           TARGET_BOOKS: "draftkings,fanduel,fanatics,betmgm"
 
-          # Schedule/coverage
+          # Coverage / API budget
           EVENTS_PER_SPORT: "1"
 
-          # Accuracy gates
+          # Pre-game only (skip live + last-minute)
+          PREGAME_BUFFER_MINUTES: "15"
+
+          # Tight quality filters (reduces weird picks)
           STRICT_MODE: "true"
-          EV_THRESHOLD: "0.01"
-          MIN_BOOKS_FOR_CONSENSUS: "3"
-          MIN_ODDS: "-180"
-          MAX_ODDS: "150"
+          MIN_BOOKS_FOR_CONSENSUS: "4"
+          EV_THRESHOLD: "0.01"         # base gate (still used)
+          MIN_EDGE: "0.020"            # meaningful edge
+          MIN_EV_DOLLARS: "0.03"       # meaningful EV per $1
+          MIN_P_FAIR: "0.54"           # better hit rate
+
+          # Odds window (avoid longshot noise)
+          MIN_ODDS: "-200"
+          MAX_ODDS: "130"
+
+          # Bankroll safety
           KELLY_CAP: "0.01"
 
-          # ✅ "Actually good" SHARP filters
-          MIN_EDGE: "0.015"
-          MIN_EV_DOLLARS: "0.02"
-
-          # Output limits
+          # Output
           MAX_SINGLES: "2"
-          COOLDOWN_MINUTES: "180"
+          WATCHLIST_COUNT: "3"
+          COOLDOWN_MINUTES: "240"
 
-          # Parlays
+          # Parlays (keep on, but we’ll only build from approved singles)
           ENABLE_PARLAYS: "true"
-          ENABLE_SGP: "true"
-          ENABLE_LOTTERY: "true"
-          SGP_DECIMAL_CAP: "6.0"
-          LOTTERY_DECIMAL_CAP: "10.0"
+          ENABLE_SGP: "false"
+          ENABLE_LOTTERY: "false"
