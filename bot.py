@@ -1,21 +1,20 @@
-# bot.py (full file)
 from __future__ import annotations
 
 import time
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dateutil import tz, parser
 
 from config import (
-    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ODDS_API_KEY,
     SPORTS, EVENTS_PER_SPORT,
-    MAX_SINGLES, COOLDOWN_MINUTES,
+    MAX_SINGLES, WATCHLIST_COUNT, COOLDOWN_MINUTES,
     STRICT_MODE, EV_THRESHOLD, KELLY_CAP,
-    MIN_EDGE, MIN_EV_DOLLARS,
+    MIN_EDGE, MIN_EV_DOLLARS, MIN_P_FAIR,
     TARGET_BOOKS, NHL_REQUIRE_CONFIRMED_GOALIE,
     MIN_BOOKS_FOR_CONSENSUS, MIN_ODDS, MAX_ODDS,
     ENABLE_PARLAYS, ENABLE_SGP, ENABLE_LOTTERY,
-    SGP_DECIMAL_CAP, LOTTERY_DECIMAL_CAP
+    PREGAME_BUFFER_MINUTES,
 )
 
 from odds_provider import get_events, get_event_odds_multi_book
@@ -28,12 +27,7 @@ from probability import (
     consensus_probability_from_probs,
     fair_prob_two_way_no_vig
 )
-from scorer import (
-    select_top,
-    build_best_builder,
-    build_controlled_sgp,
-    build_lottery
-)
+from scorer import select_top, build_best_builder
 
 
 SPORT_MARKETS = {
@@ -57,16 +51,12 @@ def send_telegram(msg: str) -> None:
         try:
             if delay:
                 time.sleep(delay)
-
             r = requests.post(url, json=payload, timeout=40)
-
             if r.status_code == 429 or 500 <= r.status_code < 600:
                 last_err = RuntimeError(f"Telegram HTTP {r.status_code}")
                 continue
-
             r.raise_for_status()
             return
-
         except Exception as e:
             last_err = e
             continue
@@ -85,12 +75,13 @@ def is_today_et(commence_time: str) -> bool:
     return dt.astimezone(eastern).date() == today_et
 
 
-def is_blocked_reception_over(c: dict) -> bool:
-    return (
-        c.get("sport") == "americanfootball_nfl"
-        and c.get("market") == "player_receptions"
-        and c.get("side") == "Over"
-    )
+def is_pregame_ok(commence_time: str) -> bool:
+    """Skip live games + skip games starting within buffer minutes."""
+    start = parser.isoparse(commence_time)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return start >= (now + timedelta(minutes=PREGAME_BUFFER_MINUTES))
 
 
 def format_pick(p: dict) -> str:
@@ -185,7 +176,7 @@ def main() -> None:
     init_db()
 
     all_candidates = []
-    blocked_gate = blocked_missing = blocked_window = blocked_books = blocked_ev = blocked_rec = 0
+    blocked_gate = blocked_missing = blocked_window = blocked_books = blocked_ev = blocked_rec = blocked_live = 0
     event_calls = odds_calls = today_used = 0
 
     for sport in SPORTS:
@@ -193,24 +184,40 @@ def main() -> None:
         event_calls += 1
 
         today = [e for e in events if e.get("commence_time") and is_today_et(e["commence_time"])]
-        today_used += min(len(today), EVENTS_PER_SPORT)
+        # pregame filter
+        today2 = []
+        for e in today:
+            if not is_pregame_ok(e["commence_time"]):
+                blocked_live += 1
+                continue
+            today2.append(e)
+
+        today_used += min(len(today2), EVENTS_PER_SPORT)
 
         markets = SPORT_MARKETS.get(sport, "")
-        for ev in today[:EVENTS_PER_SPORT]:
-            odds = get_event_odds_multi_book(sport, ev["id"], markets)
-            odds_calls += 1
+        for ev in today2[:EVENTS_PER_SPORT]:
+            try:
+                odds = get_event_odds_multi_book(sport, ev["id"], markets)
+                odds_calls += 1
+            except Exception as e:
+                # Don't crash the run; report and continue
+                print(f"Odds fetch failed: sport={sport} event_id={ev.get('id')} err={e}")
+                continue
+
             all_candidates += normalize_to_candidates(ev, odds)
 
     approved = []
+    watchlist_pool = []
 
     for c in all_candidates:
-        if is_blocked_reception_over(c):
-            blocked_rec += 1
-            continue
-
         gate = quality_gates(c, STRICT_MODE, NHL_REQUIRE_CONFIRMED_GOALIE)
         if not gate.ok or c.get("p_model") is None:
             blocked_gate += 1
+            continue
+
+        # Need at least 2 target books offering this exact side/line to avoid “weird one-book lines”
+        if len(c["target_odds_by_book"]) < 2:
+            blocked_missing += 1
             continue
 
         best = None
@@ -228,23 +235,29 @@ def main() -> None:
 
         c["ev"], c["target_book_used"], c["target_odds"] = best
 
-        # Existing consensus/EV gates
         if c["books_count"] < MIN_BOOKS_FOR_CONSENSUS:
             blocked_books += 1
             continue
-        if c["ev"] < EV_THRESHOLD:
-            blocked_ev += 1
-            continue
 
-        # ✅ "Actually good" SHARP gates (prevents tiny edges)
         p_implied = implied_prob_american(c["target_odds"])
         edge = c["p_model"] - p_implied
         c["edge"] = edge
 
-        if edge < MIN_EDGE:
+        # “Actually good” sharp filters
+        passes_base = (c["ev"] >= EV_THRESHOLD)
+        passes_sharp = (
+            c["ev"] >= MIN_EV_DOLLARS and
+            edge >= MIN_EDGE and
+            c["p_model"] >= MIN_P_FAIR
+        )
+
+        # Keep near-misses for watchlist (don’t bet)
+        if passes_base and not passes_sharp:
+            watchlist_pool.append(c)
             blocked_ev += 1
             continue
-        if c["ev"] < MIN_EV_DOLLARS:
+
+        if not passes_sharp:
             blocked_ev += 1
             continue
 
@@ -255,27 +268,37 @@ def main() -> None:
     now = datetime.now(tz=eastern).strftime("%a %b %d %I:%M %p ET")
 
     if not approved:
-        send_telegram(
-            "\n".join([
-                "ℹ️ ACCURATE MODE — Today Only",
-                f"{now}",
-                "No qualified picks today.",
-                f"API calls: events={event_calls}, event-odds={odds_calls} (today events used={today_used})",
-                f"Filters: EV≥{EV_THRESHOLD:.2f}, Books≥{MIN_BOOKS_FOR_CONSENSUS}, OddsRange[{MIN_ODDS},{MAX_ODDS}], "
-                f"KellyCap={KELLY_CAP:.3f}, MinEdge≥{MIN_EDGE:.3f}, MinEV≥{MIN_EV_DOLLARS:.2f}",
-                f"Blocked: gate={blocked_gate}, missing={blocked_missing}, window={blocked_window}, "
-                f"books={blocked_books}, ev={blocked_ev}, rec={blocked_rec}",
-            ])
-        )
+        # Build watchlist (top near-misses by EV)
+        watch = sorted(watchlist_pool, key=lambda x: x.get("ev", 0), reverse=True)[:WATCHLIST_COUNT]
+        msg_lines = [
+            "ℹ️ ACCURATE MODE — Today Only (Pre-game only)",
+            f"{now}",
+            "No qualified sharp singles today.",
+            f"Filters: Books≥{MIN_BOOKS_FOR_CONSENSUS}, OddsRange[{MIN_ODDS},{MAX_ODDS}], "
+            f"MinEdge≥{MIN_EDGE:.3f}, MinEV≥{MIN_EV_DOLLARS:.2f}, MinP≥{MIN_P_FAIR:.2f}",
+            f"Blocked: gate={blocked_gate}, missing={blocked_missing}, window={blocked_window}, "
+            f"books={blocked_books}, ev={blocked_ev}, live_skip={blocked_live}",
+        ]
+
+        if watch:
+            msg_lines += ["", "🟡 WATCHLIST (near-misses — do NOT treat as picks):"]
+            for p in watch:
+                msg_lines += [
+                    f"• {format_pick(p)}",
+                    f"  {p['event']}",
+                    f"  Book(best)={p['target_book_used']} | books={p['books_count']} | edge={p['edge']:+.3f} | EV=${p['ev']:.3f}/$1",
+                ]
+
+        send_telegram("\n".join(msg_lines))
         return
 
     singles = select_top(approved, MAX_SINGLES)
 
     lines = [
-        "✅ ACCURATE MODE — Today Only",
+        "✅ ACCURATE MODE — Today Only (Pre-game only)",
         f"{now}",
         "",
-        "🟢 SHARP SINGLES (Stake guide: ~0.75–1.0% bankroll each)",
+        "🟢 SHARP SINGLES (higher-hit + stronger edge; stake guide ~0.75–1.0% bankroll each)",
         "",
     ]
 
@@ -286,7 +309,6 @@ def main() -> None:
             continue
         mark_sent(key)
         sent_any = True
-
         lines += [
             f"• {format_pick(p)}",
             f"  {p['event']}",
@@ -301,9 +323,11 @@ def main() -> None:
     if ENABLE_PARLAYS:
         bb = build_best_builder(singles)
         if bb:
-            lines.append("🔵 BEST BUILDER PARLAY")
-            for leg in bb["legs"]:
-                lines.append(f"- {format_pick(leg)}")
+            legs = bb.get("legs", [])
+            if len(legs) >= 2:
+                lines.append("💰 BIG BUILDER (built only from approved sharp singles)")
+                for leg in legs:
+                    lines.append(f"- {format_pick(leg)}")
 
     send_telegram("\n".join(lines))
 
