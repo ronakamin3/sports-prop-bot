@@ -36,7 +36,6 @@ MAX_ODDS = int(os.getenv("MAX_ODDS", "115"))
 KELLY_CAP = float(os.getenv("KELLY_CAP", "0.01"))
 
 MAX_SINGLES = int(os.getenv("MAX_SINGLES", "2"))
-WATCHLIST_COUNT = int(os.getenv("WATCHLIST_COUNT", "3"))
 COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "240"))
 
 ENABLE_PARLAYS = os.getenv("ENABLE_PARLAYS", "true").lower() == "true"
