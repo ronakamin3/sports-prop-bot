@@ -1,3 +1,4 @@
+# bot.py (UPDATED — NO WATCHLIST, A+ picks only, pregame-only, 2 tiers)
 from __future__ import annotations
 
 import time
@@ -11,7 +12,7 @@ from config import (
     STRICT_MODE, MIN_BOOKS_FOR_CONSENSUS,
     MIN_P_FAIR, MIN_EDGE, MIN_EV_DOLLARS,
     MIN_ODDS, MAX_ODDS, KELLY_CAP,
-    MAX_SINGLES, WATCHLIST_COUNT, COOLDOWN_MINUTES,
+    MAX_SINGLES, COOLDOWN_MINUTES,
     TARGET_BOOKS, NHL_REQUIRE_CONFIRMED_GOALIE,
     ENABLE_PARLAYS, BUILDER_LEGS, BUILDER_MIN_DEC, BUILDER_MAX_DEC,
 )
@@ -24,10 +25,10 @@ from probability import (
     expected_value,
     kelly_fraction,
     consensus_probability_from_probs,
-    fair_prob_two_way_no_vig
+    fair_prob_two_way_no_vig,
 )
 
-# scorer.select_top exists; builder uses our own function below to stay reliable
+# select_top exists in your repo (used previously)
 from scorer import select_top
 
 
@@ -53,15 +54,19 @@ def send_telegram(msg: str) -> None:
             if delay:
                 time.sleep(delay)
             r = requests.post(url, json=payload, timeout=40)
+
+            # Retry on rate-limit / server hiccups
             if r.status_code == 429 or 500 <= r.status_code < 600:
-                last_err = RuntimeError(f"Telegram HTTP {r.status_code}")
+                last_err = RuntimeError(f"Telegram HTTP {r.status_code}: {r.text[:200]}")
                 continue
+
             r.raise_for_status()
             return
         except Exception as e:
             last_err = e
             continue
 
+    # Last resort: print so you can see it in Actions logs
     print("⚠️ Telegram send failed — message printed below")
     print(msg)
     print("Error:", repr(last_err))
@@ -77,6 +82,7 @@ def is_today_et(commence_time: str) -> bool:
 
 
 def is_pregame_ok(commence_time: str) -> bool:
+    """Skip live games and games starting within buffer minutes."""
     start = parser.isoparse(commence_time)
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
@@ -109,15 +115,21 @@ def american_to_decimal(odds: int) -> float:
 
 
 def build_big_builder(high_hit: list[dict]) -> dict | None:
-    """Build a 2–3 leg builder from HIGH-HIT picks only, targeting a payout window."""
+    """
+    Build a controlled builder from HIGH-HIT singles only.
+    - Exactly BUILDER_LEGS legs
+    - Avoid duplicate (player,market)
+    - Total payout in [BUILDER_MIN_DEC, BUILDER_MAX_DEC]
+    """
     if len(high_hit) < BUILDER_LEGS:
         return None
 
-    # greedy: sort by best EV first, then take first N that don't duplicate same player/market
     used = set()
     legs = []
+
+    # Greedy: pick best EV legs first
     for p in sorted(high_hit, key=lambda x: x.get("ev", 0), reverse=True):
-        sig = (p["player"], p["market"])
+        sig = (p.get("player"), p.get("market"))
         if sig in used:
             continue
         used.add(sig)
@@ -130,7 +142,7 @@ def build_big_builder(high_hit: list[dict]) -> dict | None:
 
     dec = 1.0
     for l in legs:
-        dec *= american_to_decimal(l["target_odds"])
+        dec *= american_to_decimal(int(l["target_odds"]))
 
     if not (BUILDER_MIN_DEC <= dec <= BUILDER_MAX_DEC):
         return None
@@ -142,7 +154,7 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
     sport = event.get("sport_key")
     event_name = f"{event.get('away_team','')} @ {event.get('home_team','')}".strip(" @")
 
-    by_key = {}
+    by_key: dict[tuple, dict] = {}
 
     for bm in odds_data.get("bookmakers", []):
         bk = (bm.get("key") or "").lower()
@@ -154,17 +166,21 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
                 line = o.get("point")
                 price = o.get("price")
 
-                if not player or not market_key or not side or not isinstance(price, int):
+                if not player or not market_key or not side:
+                    continue
+                if not isinstance(price, int):
                     continue
 
                 k = (market_key, player, line)
                 by_key.setdefault(k, {}).setdefault(bk, {})[side] = price
 
-    out = []
+    out: list[dict] = []
+
     for (market, player, line), books in by_key.items():
+        # Detect 2-way O/U markets for no-vig fair probability
         is_ou = any("Over" in s and "Under" in s for s in books.values())
         fair_over, fair_under = [], []
-        implied = {}
+        implied: dict[str, list[float]] = {}
 
         for sides in books.values():
             if "Over" in sides and "Under" in sides:
@@ -173,13 +189,19 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
                 fo = fair_prob_two_way_no_vig(po, pu)
                 fair_over.append(fo)
                 fair_under.append(1 - fo)
+
             for s, o in sides.items():
                 implied.setdefault(s, []).append(implied_prob_american(o))
 
-        sides = ["Over", "Under"] if is_ou else implied.keys()
+        sides_to_emit = ["Over", "Under"] if is_ou else list(implied.keys())
 
-        for side in sides:
-            odds_map = {b: books[b][side] for b in TARGET_BOOKS if b in books and side in books[b]}
+        for side in sides_to_emit:
+            odds_map = {
+                b: books[b][side]
+                for b in TARGET_BOOKS
+                if b in books and side in books[b]
+            }
+
             probs = (fair_over if side == "Over" else fair_under) if is_ou else implied.get(side, [])
             p_model = consensus_probability_from_probs(probs)
 
@@ -193,7 +215,7 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
                 "target_odds_by_book": odds_map,
                 "p_model": p_model,
                 "books_count": len(probs),
-                "goalie_confirmed": None,
+                "goalie_confirmed": None,  # placeholder if you later wire goalie confirmation
             })
 
     return out
@@ -202,37 +224,59 @@ def normalize_to_candidates(event: dict, odds_data: dict) -> list[dict]:
 def main() -> None:
     init_db()
 
-    all_candidates = []
-    blocked = {"gate": 0, "missing": 0, "window": 0, "books": 0, "tier": 0, "live": 0}
+    all_candidates: list[dict] = []
+
+    blocked = {
+        "gate": 0,
+        "missing": 0,
+        "window": 0,
+        "books": 0,
+        "tier": 0,
+        "live_skip": 0,
+        "odds_api_fail": 0,
+    }
     event_calls = odds_calls = today_used = 0
 
+    # 1) Pull events + odds (pregame-only)
     for sport in SPORTS:
-        events = get_events(sport)
+        try:
+            events = get_events(sport)
+        except Exception as e:
+            print(f"Events fetch failed for sport={sport}: {e}")
+            blocked["odds_api_fail"] += 1
+            continue
+
         event_calls += 1
 
-        today = [e for e in events if e.get("commence_time") and is_today_et(e["commence_time"])]
-        pre = []
-        for e in today:
+        today_events = [
+            e for e in events
+            if e.get("commence_time") and is_today_et(e["commence_time"])
+        ]
+
+        pregame = []
+        for e in today_events:
             if not is_pregame_ok(e["commence_time"]):
-                blocked["live"] += 1
+                blocked["live_skip"] += 1
                 continue
-            pre.append(e)
+            pregame.append(e)
 
-        today_used += min(len(pre), EVENTS_PER_SPORT)
+        today_used += min(len(pregame), EVENTS_PER_SPORT)
+
         markets = SPORT_MARKETS.get(sport, "")
-
-        for ev in pre[:EVENTS_PER_SPORT]:
+        for ev in pregame[:EVENTS_PER_SPORT]:
             try:
                 odds = get_event_odds_multi_book(sport, ev["id"], markets)
                 odds_calls += 1
             except Exception as e:
+                # Don't crash — continue other sports/events
                 print(f"Odds fetch failed: sport={sport} event_id={ev.get('id')} err={e}")
+                blocked["odds_api_fail"] += 1
                 continue
 
             all_candidates += normalize_to_candidates(ev, odds)
 
-    approved_high_hit = []
-    watchlist_pool = []
+    # 2) Filter down to A+ (HIGH-HIT) only
+    approved_high_hit: list[dict] = []
 
     for c in all_candidates:
         gate = quality_gates(c, STRICT_MODE, NHL_REQUIRE_CONFIRMED_GOALIE)
@@ -240,12 +284,12 @@ def main() -> None:
             blocked["gate"] += 1
             continue
 
-        # Need at least 2 target books posting this exact line to avoid weirdness
+        # Need at least 2 target books posting this exact line/side
         if len(c["target_odds_by_book"]) < 2:
             blocked["missing"] += 1
             continue
 
-        # choose best target odds among target books
+        # Choose best odds among target books within odds window
         best = None
         for book, odds in c["target_odds_by_book"].items():
             if odds < MIN_ODDS or odds > MAX_ODDS:
@@ -269,9 +313,8 @@ def main() -> None:
         edge = c["p_model"] - p_implied
         c["edge"] = edge
 
-        # Tier 1 HIGH-HIT gate
+        # A+ tier: hit-first + edge + EV
         if not (c["p_model"] >= MIN_P_FAIR and edge >= MIN_EDGE and c["ev"] >= MIN_EV_DOLLARS):
-            watchlist_pool.append(c)
             blocked["tier"] += 1
             continue
 
@@ -281,63 +324,81 @@ def main() -> None:
     eastern = tz.gettz("America/New_York")
     now = datetime.now(tz=eastern).strftime("%a %b %d %I:%M %p ET")
 
+    # 3) If no A+ picks → send "no bet" (no watchlist, no filler)
+    if not approved_high_hit:
+        msg = "\n".join([
+            "ℹ️ BEST MODE — All Sports (Pre-game only)",
+            f"{now}",
+            "No A+ picks today. Best move is no bet.",
+            "",
+            f"API calls: events={event_calls}, event-odds={odds_calls} (today events used={today_used})",
+            f"Filters: Books≥{MIN_BOOKS_FOR_CONSENSUS}, OddsRange[{MIN_ODDS},{MAX_ODDS}], "
+            f"MinP≥{MIN_P_FAIR:.2f}, MinEdge≥{MIN_EDGE:.3f}, MinEV≥{MIN_EV_DOLLARS:.3f}",
+            f"Blocked: gate={blocked['gate']}, missing={blocked['missing']}, window={blocked['window']}, "
+            f"books={blocked['books']}, tier={blocked['tier']}, live_skip={blocked['live_skip']}, api_fail={blocked['odds_api_fail']}",
+        ])
+        send_telegram(msg)
+        return
+
+    # 4) Send HIGH-HIT singles
+    high_hit = select_top(approved_high_hit, MAX_SINGLES)
+
     lines = [
         "✅ BEST MODE — All Sports (Pre-game only)",
         f"{now}",
         "",
+        "🟢 HIGH-HIT SINGLES (A+ only)",
+        "Stake guide: ~0.75–1.0% bankroll each",
+        "",
     ]
 
-    # HIGH-HIT SINGLES
-    high_hit = select_top(approved_high_hit, MAX_SINGLES)
-    if high_hit:
-        lines += ["🟢 HIGH-HIT SINGLES (bankroll first)", ""]
-        for p in high_hit:
-            key = f"{p['event']}|{p['player']}|{p['market']}|{p['side']}|{p['target_odds']}"
-            if was_sent_recently(key, COOLDOWN_MINUTES):
-                continue
-            mark_sent(key)
-            lines += [
-                f"• {format_pick(p)}",
-                f"  {p['event']}",
-                f"  Book={p['target_book_used']}",
-                f"  {why_line(p)}",
-                "",
-            ]
-    else:
-        lines += ["ℹ️ No HIGH-HIT singles today.", ""]
+    sent_any = False
+    sent_count = 0
 
-    # BIG-MONEY BUILDER (only from HIGH-HIT pool)
-    if ENABLE_PARLAYS:
-        bb = build_big_builder(high_hit)
+    for p in high_hit:
+        key = f"{p['event']}|{p['player']}|{p['market']}|{p['side']}|{p['target_odds']}"
+        if was_sent_recently(key, COOLDOWN_MINUTES):
+            continue
+        mark_sent(key)
+        sent_any = True
+        sent_count += 1
+
+        lines += [
+            f"• {format_pick(p)}",
+            f"  {p['event']}",
+            f"  Book={p['target_book_used']}",
+            f"  {why_line(p)}",
+            "",
+        ]
+
+    if not sent_any:
+        # Everything was suppressed by cooldown — avoid spamming
+        return
+
+    # 5) Builder (ONLY from the HIGH-HIT singles we just sent)
+    if ENABLE_PARLAYS and sent_count >= BUILDER_LEGS:
+        bb = build_big_builder(high_hit[:sent_count])
         if bb:
             lines += [
-                f"💰 BIG-MONEY BUILDER ({BUILDER_LEGS} legs) — built ONLY from HIGH-HIT",
+                f"💰 BIG-MONEY BUILDER ({BUILDER_LEGS} legs) — built ONLY from A+ singles",
                 f"Target decimal odds: {BUILDER_MIN_DEC:.1f}–{BUILDER_MAX_DEC:.1f} | This one ≈ {bb['dec_odds']:.2f}",
             ]
             for leg in bb["legs"]:
                 lines.append(f"- {format_pick(leg)}")
-            lines.append("Stake guide: 0.10–0.25% bankroll (small).")
-            lines.append("")
-        else:
-            lines.append("ℹ️ No builder today (need enough HIGH-HIT legs within payout range).")
-            lines.append("")
-
-    # WATCHLIST (near-misses)
-    watch = sorted(watchlist_pool, key=lambda x: x.get("ev", 0), reverse=True)[:WATCHLIST_COUNT]
-    if watch:
-        lines += ["🟡 WATCHLIST (near-misses — do NOT treat as picks)", ""]
-        for p in watch:
             lines += [
-                f"• {format_pick(p)}",
-                f"  {p['event']}",
-                f"  Book(best)={p['target_book_used']} | books={p['books_count']} | edge={p['edge']:+.3f} | EV=${p['ev']:.3f}/$1",
+                "Stake guide: 0.10–0.25% bankroll (small).",
+                "",
+            ]
+        else:
+            lines += [
+                "ℹ️ No builder today (A+ legs not enough or payout out of range).",
+                "",
             ]
 
     lines += [
-        "",
         f"API calls: events={event_calls}, event-odds={odds_calls} (today events used={today_used})",
         f"Blocked: gate={blocked['gate']}, missing={blocked['missing']}, window={blocked['window']}, "
-        f"books={blocked['books']}, tier={blocked['tier']}, live_skip={blocked['live']}",
+        f"books={blocked['books']}, tier={blocked['tier']}, live_skip={blocked['live_skip']}, api_fail={blocked['odds_api_fail']}",
     ]
 
     send_telegram("\n".join(lines))
