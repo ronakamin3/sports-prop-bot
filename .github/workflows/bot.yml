@@ -33,14 +33,9 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
           REGION: "us"
-
-          # Books
           TARGET_BOOKS: "draftkings,fanduel,betmgm,fanatics"
 
-          # Coverage / API budget
           EVENTS_PER_SPORT: "1"
-
-          # Pregame-only
           PREGAME_BUFFER_MINUTES: "20"
 
           # Tier 1 (HIGH-HIT) gates
@@ -55,15 +50,13 @@ jobs:
 
           # Output
           MAX_SINGLES: "2"
-          WATCHLIST_COUNT: "3"
           COOLDOWN_MINUTES: "240"
 
-          # Tier 2 Builder (big payout, controlled)
+          # Tier 2 Builder
           ENABLE_PARLAYS: "true"
           BUILDER_LEGS: "3"
           BUILDER_MIN_DEC: "3.0"
           BUILDER_MAX_DEC: "6.0"
 
-          # Keep these off (too noisy)
           ENABLE_SGP: "false"
           ENABLE_LOTTERY: "false"
