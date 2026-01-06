@@ -24,11 +24,9 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install requirements
-        run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt
 
-      - name: Run bot
-        run: python bot.py
+      - run: python bot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -36,28 +34,23 @@ jobs:
 
           REGION: "us"
 
-          # Books (coverage)
-          TARGET_BOOKS: "draftkings,fanduel,fanatics,betmgm"
+          # Books
+          TARGET_BOOKS: "draftkings,fanduel,betmgm,fanatics"
 
           # Coverage / API budget
           EVENTS_PER_SPORT: "1"
 
-          # Pre-game only (skip live + last-minute)
-          PREGAME_BUFFER_MINUTES: "15"
+          # Pregame-only
+          PREGAME_BUFFER_MINUTES: "20"
 
-          # Tight quality filters (reduces weird picks)
+          # Tier 1 (HIGH-HIT) gates
           STRICT_MODE: "true"
           MIN_BOOKS_FOR_CONSENSUS: "4"
-          EV_THRESHOLD: "0.01"         # base gate (still used)
-          MIN_EDGE: "0.020"            # meaningful edge
-          MIN_EV_DOLLARS: "0.03"       # meaningful EV per $1
-          MIN_P_FAIR: "0.54"           # better hit rate
-
-          # Odds window (avoid longshot noise)
-          MIN_ODDS: "-200"
-          MAX_ODDS: "130"
-
-          # Bankroll safety
+          MIN_P_FAIR: "0.56"
+          MIN_EDGE: "0.020"
+          MIN_EV_DOLLARS: "0.020"
+          MIN_ODDS: "-220"
+          MAX_ODDS: "115"
           KELLY_CAP: "0.01"
 
           # Output
@@ -65,7 +58,12 @@ jobs:
           WATCHLIST_COUNT: "3"
           COOLDOWN_MINUTES: "240"
 
-          # Parlays (keep on, but we’ll only build from approved singles)
+          # Tier 2 Builder (big payout, controlled)
           ENABLE_PARLAYS: "true"
+          BUILDER_LEGS: "3"
+          BUILDER_MIN_DEC: "3.0"
+          BUILDER_MAX_DEC: "6.0"
+
+          # Keep these off (too noisy)
           ENABLE_SGP: "false"
           ENABLE_LOTTERY: "false"
