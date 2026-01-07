@@ -11,6 +11,7 @@ TARGET_BOOKS = [
     for x in os.getenv("TARGET_BOOKS", "draftkings,fanduel,betmgm,fanatics").split(",")
 ]
 
+# All sports
 SPORTS = [
     "americanfootball_nfl",
     "basketball_nba",
@@ -25,13 +26,13 @@ PREGAME_BUFFER_MINUTES = int(os.getenv("PREGAME_BUFFER_MINUTES", "20"))
 
 STRICT_MODE = os.getenv("STRICT_MODE", "true").lower() == "true"
 
-MIN_BOOKS_FOR_CONSENSUS = int(os.getenv("MIN_BOOKS_FOR_CONSENSUS", "4"))
-MIN_P_FAIR = float(os.getenv("MIN_P_FAIR", "0.56"))
-MIN_EDGE = float(os.getenv("MIN_EDGE", "0.020"))
-MIN_EV_DOLLARS = float(os.getenv("MIN_EV_DOLLARS", "0.020"))
+MIN_BOOKS_FOR_CONSENSUS = int(os.getenv("MIN_BOOKS_FOR_CONSENSUS", "3"))
+MIN_P_FAIR = float(os.getenv("MIN_P_FAIR", "0.55"))
+MIN_EDGE = float(os.getenv("MIN_EDGE", "0.018"))
+MIN_EV_DOLLARS = float(os.getenv("MIN_EV_DOLLARS", "0.015"))
 
 MIN_ODDS = int(os.getenv("MIN_ODDS", "-220"))
-MAX_ODDS = int(os.getenv("MAX_ODDS", "115"))
+MAX_ODDS = int(os.getenv("MAX_ODDS", "130"))
 
 KELLY_CAP = float(os.getenv("KELLY_CAP", "0.01"))
 
