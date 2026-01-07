@@ -33,26 +33,35 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
           REGION: "us"
+
+          # Books
           TARGET_BOOKS: "draftkings,fanduel,betmgm,fanatics"
 
+          # Coverage / API budget
           EVENTS_PER_SPORT: "1"
+
+          # Pregame-only
           PREGAME_BUFFER_MINUTES: "20"
 
-          # Tier 1 (HIGH-HIT) gates
+          # ✅ Balanced “little bit of all” mode
           STRICT_MODE: "true"
-          MIN_BOOKS_FOR_CONSENSUS: "4"
-          MIN_P_FAIR: "0.56"
-          MIN_EDGE: "0.020"
-          MIN_EV_DOLLARS: "0.020"
+          MIN_BOOKS_FOR_CONSENSUS: "3"
+          MIN_P_FAIR: "0.55"
+          MIN_EDGE: "0.018"
+          MIN_EV_DOLLARS: "0.015"
+
+          # Odds window (slightly wider)
           MIN_ODDS: "-220"
-          MAX_ODDS: "115"
+          MAX_ODDS: "130"
+
+          # Bankroll safety
           KELLY_CAP: "0.01"
 
           # Output
           MAX_SINGLES: "2"
           COOLDOWN_MINUTES: "240"
 
-          # Tier 2 Builder
+          # Builder stays on, but only triggers if enough A+ singles exist
           ENABLE_PARLAYS: "true"
           BUILDER_LEGS: "3"
           BUILDER_MIN_DEC: "3.0"
