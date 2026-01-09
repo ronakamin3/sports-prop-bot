@@ -25,7 +25,6 @@ jobs:
           python-version: "3.11"
 
       - run: pip install -r requirements.txt
-
       - run: python bot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -35,30 +34,49 @@ jobs:
           REGION: "us"
           TARGET_BOOKS: "draftkings,fanduel,betmgm,fanatics"
 
+          # ✅ ALL sports + add college
+          SPORTS: "americanfootball_nfl,basketball_nba,baseball_mlb,icehockey_nhl,soccer_epl,soccer_usa_mls,americanfootball_ncaaf,basketball_ncaab"
+
           EVENTS_PER_SPORT: "6"
           PREGAME_BUFFER_MINUTES: "15"
 
+          # Balanced quality gates (all sports)
           STRICT_MODE: "true"
-          MIN_BOOKS_FOR_CONSENSUS: "3"
+          MIN_BOOKS_FOR_CONSENSUS: "4"
           MIN_P_FAIR: "0.54"
-          MIN_EDGE: "0.016"
+          MIN_EDGE: "0.015"
           MIN_EV_DOLLARS: "0.012"
-
           MIN_ODDS: "-220"
           MAX_ODDS: "150"
-
           KELLY_CAP: "0.01"
           MAX_SINGLES: "2"
           COOLDOWN_MINUTES: "240"
 
+          # No-stupid-loss protections (all sports)
+          MAX_EDGE_CAP: "0.08"
+          ONE_PICK_PER_GAME: "true"
+
+          # Verify-before-send (all sports)
+          LINE_TOLERANCE: "1.0"
+          VERIFY_BEFORE_SEND: "true"
+          MAX_VERIFY_EVENTS: "4"
+          MAX_ODDS_MOVE_ABS: "25"
+
+          # NHL-only stricter (shots unders)
+          NHL_SHOTS_UNDER_MIN_BOOKS: "5"
+          NHL_LINE_TOLERANCE: "0.0"
+
+          # ✅ LIVE team picks (all sports) — strict & low-volume
+          LIVE_ENABLE: "true"
+          LIVE_MAX_EVENTS_PER_SPORT: "1"
+          LIVE_LOOKBACK_MINUTES: "180"
+          LIVE_MARKETS: "h2h,spreads,totals"
+          LIVE_MIN_BOOKS: "5"
+          LIVE_MIN_EDGE: "0.020"
+          LIVE_MIN_EV_DOLLARS: "0.020"
+
+          # Builder (optional)
           ENABLE_PARLAYS: "true"
           BUILDER_LEGS: "3"
           BUILDER_MIN_DEC: "3.0"
           BUILDER_MAX_DEC: "6.0"
-
-          ENABLE_SGP: "false"
-          ENABLE_LOTTERY: "false"
-
-          # ✅ NEW: better matching + re-check odds right before sending
-          LINE_TOLERANCE: "1.0"
-          REFRESH_BEFORE_SEND: "true"
