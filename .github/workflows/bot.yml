@@ -25,6 +25,7 @@ jobs:
           python-version: "3.11"
 
       - run: pip install -r requirements.txt
+
       - run: python bot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -34,49 +35,43 @@ jobs:
           REGION: "us"
           TARGET_BOOKS: "draftkings,fanduel,betmgm,fanatics"
 
-          # ✅ ALL sports + add college
           SPORTS: "americanfootball_nfl,basketball_nba,baseball_mlb,icehockey_nhl,soccer_epl,soccer_usa_mls,americanfootball_ncaaf,basketball_ncaab"
-
           EVENTS_PER_SPORT: "6"
           PREGAME_BUFFER_MINUTES: "15"
 
-          # Balanced quality gates (all sports)
-          STRICT_MODE: "true"
-          MIN_BOOKS_FOR_CONSENSUS: "4"
-          MIN_P_FAIR: "0.54"
-          MIN_EDGE: "0.015"
-          MIN_EV_DOLLARS: "0.012"
-          MIN_ODDS: "-220"
-          MAX_ODDS: "150"
-          KELLY_CAP: "0.01"
-          MAX_SINGLES: "2"
-          COOLDOWN_MINUTES: "240"
-
-          # No-stupid-loss protections (all sports)
+          # --- Global protections (keep you out of traps) ---
           MAX_EDGE_CAP: "0.08"
           ONE_PICK_PER_GAME: "true"
-
-          # Verify-before-send (all sports)
-          LINE_TOLERANCE: "1.0"
           VERIFY_BEFORE_SEND: "true"
           MAX_VERIFY_EVENTS: "4"
           MAX_ODDS_MOVE_ABS: "25"
 
-          # NHL-only stricter (shots unders)
-          NHL_SHOTS_UNDER_MIN_BOOKS: "5"
-          NHL_LINE_TOLERANCE: "0.0"
+          # --- SHARP SINGLES (primary) ---
+          SHARP_MAX_SINGLES: "2"
+          SHARP_MIN_BOOKS: "4"
+          SHARP_MIN_P: "0.53"
+          SHARP_MIN_EDGE: "0.014"
+          SHARP_MIN_EV: "0.012"
+          SHARP_MIN_ODDS: "-220"
+          SHARP_MAX_ODDS: "175"
 
-          # ✅ LIVE team picks (all sports) — strict & low-volume
-          LIVE_ENABLE: "true"
-          LIVE_MAX_EVENTS_PER_SPORT: "1"
-          LIVE_LOOKBACK_MINUTES: "180"
-          LIVE_MARKETS: "h2h,spreads,totals"
-          LIVE_MIN_BOOKS: "5"
-          LIVE_MIN_EDGE: "0.020"
-          LIVE_MIN_EV_DOLLARS: "0.020"
-
-          # Builder (optional)
-          ENABLE_PARLAYS: "true"
+          # --- SHARP BUILDER (built from SHARP singles only) ---
+          ENABLE_SHARP_BUILDER: "true"
           BUILDER_LEGS: "3"
           BUILDER_MIN_DEC: "3.0"
-          BUILDER_MAX_DEC: "6.0"
+          BUILDER_MAX_DEC: "7.0"
+
+          # --- LOTTO (high variance 3-leg, optional, tiny stake) ---
+          ENABLE_LOTTO_3LEG: "true"
+          LOTTO_LEGS: "3"
+          LOTTO_MIN_ODDS: "110"
+          LOTTO_MAX_ODDS: "350"
+          LOTTO_MIN_BOOKS: "4"
+          LOTTO_MIN_EDGE: "0.018"
+          LOTTO_MIN_EV: "0.015"
+          LOTTO_MAX_TOTAL_DEC: "18.0"
+
+          # --- NHL extra strict (shots unders) ---
+          NHL_SHOTS_UNDER_MIN_BOOKS: "5"
+          NHL_LINE_TOLERANCE: "0.0"
+          LINE_TOLERANCE: "1.0"
