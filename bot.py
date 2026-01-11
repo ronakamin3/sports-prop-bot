@@ -417,25 +417,29 @@ def main() -> None:
     any_sent = False
 
     def maybe_emit_section(title: str, picks: list[dict], stake_line: str):
-        nonlocal any_sent
-        if not picks:
-            return
-        lines.append(title)
-        lines.append(stake_line)
-        lines.append("")
-        for p in picks:
-            key = f"{p['event']}|{p['market']}|{p['player']}|{p['side']}|{p.get('line')}|{p['target_book_used']}|{p['target_odds']}"
-            if was_sent_recently(key, COOLDOWN_MINUTES):
-                continue
-            mark_sent(key)
-            lines += [
-                f"• {format_pick(p)}",
-                f"  {p['event']}",
-                f"  Book={p['target_book_used']}",
-                f"  {why_line(p)}",
-                "",
-            ]
-            any_sent = True
+    nonlocal any_sent
+    if not picks:
+        return
+
+    lines.append(title)
+    lines.append(stake_line)
+    lines.append("")
+
+    for p in picks:
+        key = f"{p['event']}|{p['market']}|{p['player']}|{p['side']}|{p.get('line')}|{p['target_book_used']}|{p['target_odds']}"
+        if was_sent_recently(key, COOLDOWN_MINUTES):
+            continue
+        mark_sent(key)
+
+        lines.extend([
+            f"• {format_pick(p)}",
+            f"  {p['event']}",
+            f"  Book={p['target_book_used']}",
+            f"  {why_line(p)}",
+            "",
+        ])
+        any_sent = True
+
 
     maybe_emit_section("🟢 SHARP SINGLES", sharp, "Stake guide: ~0.75–1.0% bankroll each")
 
