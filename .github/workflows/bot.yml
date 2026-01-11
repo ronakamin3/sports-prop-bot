@@ -2,8 +2,8 @@ name: sports-prop-bot
 
 on:
   schedule:
-    - cron: "0 14 * * *"     # 9:00 AM ET
-    - cron: "0 20 * * *"     # 3:00 PM ET
+    - cron: "0 14 * * *"   # 9:00 AM ET
+    - cron: "0 20 * * *"   # 3:00 PM ET
   workflow_dispatch:
 
 jobs:
@@ -11,14 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Restore bot state
-        uses: actions/cache@v4
-        with:
-          path: bot.db
-          key: botdb-${{ github.repository }}-${{ github.ref_name }}
-          restore-keys: |
-            botdb-${{ github.repository }}-
 
       - uses: actions/setup-python@v5
         with:
@@ -32,46 +24,62 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
-          REGION: "us"
-          TARGET_BOOKS: "draftkings,fanduel,betmgm,fanatics"
+          REGION: us
+          TARGET_BOOKS: draftkings,fanduel,betmgm,fanatics
 
-          SPORTS: "americanfootball_nfl,basketball_nba,baseball_mlb,icehockey_nhl,soccer_epl,soccer_usa_mls,americanfootball_ncaaf,basketball_ncaab"
-          EVENTS_PER_SPORT: "6"
-          PREGAME_BUFFER_MINUTES: "15"
+          # ✅ NHL REMOVED
+          SPORTS: americanfootball_nfl,basketball_nba,baseball_mlb,soccer_epl,soccer_usa_mls,americanfootball_ncaaf,basketball_ncaab
 
-          # --- Global protections (keep you out of traps) ---
-          MAX_EDGE_CAP: "0.08"
-          ONE_PICK_PER_GAME: "true"
-          VERIFY_BEFORE_SEND: "true"
-          MAX_VERIFY_EVENTS: "4"
-          MAX_ODDS_MOVE_ABS: "25"
+          EVENTS_PER_SPORT: 6
+          PREGAME_BUFFER_MINUTES: 15
+          COOLDOWN_MINUTES: 90
 
-          # --- SHARP SINGLES (primary) ---
-          SHARP_MAX_SINGLES: "2"
-          SHARP_MIN_BOOKS: "4"
-          SHARP_MIN_P: "0.53"
-          SHARP_MIN_EDGE: "0.014"
-          SHARP_MIN_EV: "0.012"
-          SHARP_MIN_ODDS: "-220"
-          SHARP_MAX_ODDS: "175"
+          MAX_EDGE_CAP: 0.08
+          ONE_PICK_PER_GAME: true
+          VERIFY_BEFORE_SEND: true
+          MAX_VERIFY_EVENTS: 4
+          MAX_ODDS_MOVE_ABS: 25
 
-          # --- SHARP BUILDER (built from SHARP singles only) ---
-          ENABLE_SHARP_BUILDER: "true"
-          BUILDER_LEGS: "3"
-          BUILDER_MIN_DEC: "3.0"
-          BUILDER_MAX_DEC: "7.0"
+          # --- SHARP singles ---
+          SHARP_MAX_SINGLES: 2
+          SHARP_MIN_BOOKS: 4
+          SHARP_MIN_P: 0.53
+          SHARP_MIN_EDGE: 0.014
+          SHARP_MIN_EV: 0.012
+          SHARP_MIN_ODDS: -220
+          SHARP_MAX_ODDS: 175
 
-          # --- LOTTO (high variance 3-leg, optional, tiny stake) ---
-          ENABLE_LOTTO_3LEG: "true"
-          LOTTO_LEGS: "3"
-          LOTTO_MIN_ODDS: "110"
-          LOTTO_MAX_ODDS: "350"
-          LOTTO_MIN_BOOKS: "4"
-          LOTTO_MIN_EDGE: "0.018"
-          LOTTO_MIN_EV: "0.015"
-          LOTTO_MAX_TOTAL_DEC: "18.0"
+          # --- SHARP builder (from SHARP singles only) ---
+          ENABLE_SHARP_BUILDER: true
+          BUILDER_LEGS: 3
+          BUILDER_MIN_DEC: 3.0
+          BUILDER_MAX_DEC: 7.0
 
-          # --- NHL extra strict (shots unders) ---
-          NHL_SHOTS_UNDER_MIN_BOOKS: "5"
-          NHL_LINE_TOLERANCE: "0.0"
-          LINE_TOLERANCE: "1.0"
+          # --- LOTTO 3-leg (high variance, optional) ---
+          ENABLE_LOTTO_3LEG: true
+          LOTTO_LEGS: 3
+          LOTTO_MIN_ODDS: 110
+          LOTTO_MAX_ODDS: 350
+          LOTTO_MIN_BOOKS: 4
+          LOTTO_MIN_EDGE: 0.018
+          LOTTO_MIN_EV: 0.015
+          LOTTO_MAX_TOTAL_DEC: 18.0
+
+          # --- PLUS-MONEY bigger wins ---
+          ENABLE_PLUS_SHOTS: true
+          PLUS_MAX_PICKS: 1
+          PLUS_MIN_ODDS: 160
+          PLUS_MAX_ODDS: 320
+          PLUS_MIN_BOOKS: 5
+          PLUS_MIN_EDGE: 0.020
+          PLUS_MIN_EV: 0.015
+
+          # --- High-variance parlay (bigger payout) ---
+          ENABLE_HIGHVAR_3LEG: true
+          HIGHVAR_LEGS: 3
+          HIGHVAR_MIN_ODDS: 140
+          HIGHVAR_MAX_ODDS: 350
+          HIGHVAR_MIN_TOTAL_DEC: 6.0
+          HIGHVAR_MAX_TOTAL_DEC: 20.0
+
+          LINE_TOLERANCE: 1.0
