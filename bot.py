@@ -25,39 +25,45 @@ from config import (
 
 from odds_provider import get_events, get_event_odds_multi_book
 from storage import init_db, was_sent_recently, mark_sent
-from probability import implied_prob_american, expected_value, kelly_fraction, consensus_probability_from_probs, fair_prob_two_way_no_vig
+from probability import (
+    implied_prob_american,
+    expected_value,
+    kelly_fraction,
+    consensus_probability_from_probs,
+    fair_prob_two_way_no_vig,
+)
 
 
-# HARD DISABLE NHL (safety)
-SPORTS = [s for s in SPORTS if s != "icehockey_nhl"]
+# ---------- small utils ----------
 
+def send_telegram(msg: str) -> bool:
+    """Returns True if sent; False otherwise."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
+        print(msg)
+        return False
 
-SPORT_MARKETS_PREGAME = {
-    "basketball_nba": "player_points,player_threes,player_points_rebounds_assists,spreads,h2h,totals",
-    "americanfootball_nfl": "player_receptions,player_reception_yds,player_pass_yds,player_anytime_td,spreads,h2h,totals",
-    "baseball_mlb": "pitcher_strikeouts,batter_hits,batter_total_bases,batter_home_runs,spreads,h2h,totals",
-    "soccer_epl": "player_shots,player_shots_on_target,player_goal_scorer_anytime,player_assists,spreads,h2h,totals",
-    "soccer_usa_mls": "player_shots,player_shots_on_target,player_goal_scorer_anytime,player_assists,spreads,h2h,totals",
-    "americanfootball_ncaaf": "h2h,spreads,totals",
-    "basketball_ncaab": "h2h,spreads,totals",
-}
-
-
-def send_telegram(msg: str) -> None:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "disable_web_page_preview": True}
+
+    # Retries for network/429/5xx
     for delay in (0, 2, 5, 10):
         try:
             if delay:
                 time.sleep(delay)
             r = requests.post(url, json=payload, timeout=35)
-            if r.status_code == 429 or 500 <= r.status_code < 600:
+
+            if r.status_code in (429,) or (500 <= r.status_code < 600):
                 continue
+
             r.raise_for_status()
-            return
-        except Exception:
-            continue
-    print("⚠️ Telegram send failed")
+            return True
+        except Exception as e:
+            last_err = str(e)
+
+    print("⚠️ Telegram send failed:", last_err)
+    print(msg)
+    return False
 
 
 def is_today_et(commence_time: str) -> bool:
@@ -93,25 +99,56 @@ def within_tol(a, b, tol: float) -> bool:
     return abs(float(a) - float(b)) <= tol
 
 
+# ---------- markets per sport ----------
+
+SPORTS_NO_NHL = [s for s in SPORTS if s != "icehockey_nhl"]  # enforce removal
+
+SPORT_MARKETS_PREGAME = {
+    "basketball_nba": "player_points,player_threes,player_points_rebounds_assists,spreads,h2h,totals",
+    "americanfootball_nfl": "player_receptions,player_reception_yds,player_pass_yds,player_anytime_td,spreads,h2h,totals",
+    "baseball_mlb": "pitcher_strikeouts,batter_hits,batter_total_bases,batter_home_runs,spreads,h2h,totals",
+    "soccer_epl": "player_shots,player_shots_on_target,player_goal_scorer_anytime,player_assists,spreads,h2h,totals",
+    "soccer_usa_mls": "player_shots,player_shots_on_target,player_goal_scorer_anytime,player_assists,spreads,h2h,totals",
+    "americanfootball_ncaaf": "h2h,spreads,totals",
+    "basketball_ncaab": "h2h,spreads,totals",
+}
+
+
+# ---------- odds indexing ----------
+
 def normalize_event_index(odds_data: dict) -> dict:
+    """
+    Index outcomes by (market, participant, side) -> list of dict(book,line,price,fair_prob_in_book?).
+    Adds no-vig fair probs for two-way Over/Under markets when possible.
+    """
     idx = {}
     for bm in odds_data.get("bookmakers", []):
         book = (bm.get("key") or "").lower()
+
         for m in bm.get("markets", []):
             market = m.get("key")
             outcomes = m.get("outcomes", [])
+
+            # capture OU pairs per (participant,line)
             ou_pairs = {}
+
             for o in outcomes:
                 participant = o.get("description") or o.get("name")
                 side = o.get("name")
                 line = o.get("point")
                 price = o.get("price")
+
                 if not participant or not market or not side or not isinstance(price, int):
                     continue
-                idx.setdefault((market, participant, side), []).append({"book": book, "line": line, "price": price})
+
+                idx.setdefault((market, participant, side), []).append(
+                    {"book": book, "line": line, "price": price}
+                )
+
                 if side in ("Over", "Under") and line is not None:
                     ou_pairs.setdefault((participant, float(line)), {})[side] = price
 
+            # compute no-vig fair probabilities for OU pairs in this bookmaker
             for (participant, line), sides in ou_pairs.items():
                 if "Over" in sides and "Under" in sides:
                     po = implied_prob_american(sides["Over"])
@@ -120,14 +157,19 @@ def normalize_event_index(odds_data: dict) -> dict:
                     for side in ("Over", "Under"):
                         key = (market, participant, side)
                         for e in idx.get(key, []):
-                            if e["book"] == book and e["line"] is not None and float(e["line"]) == float(line):
+                            if e["book"] == book and e.get("line") is not None and float(e["line"]) == float(line):
                                 e["fair_prob_in_book"] = fo if side == "Over" else (1 - fo)
+
     return idx
 
 
 def consensus_prob(idx: dict, market: str, participant: str, side: str, target_line, tol: float):
+    """
+    Return consensus fair probability (no-vig when available) and count of contributing books.
+    """
     entries = idx.get((market, participant, side), [])
     probs = []
+
     for e in entries:
         line = e.get("line")
         if target_line is None:
@@ -136,11 +178,97 @@ def consensus_prob(idx: dict, market: str, participant: str, side: str, target_l
         else:
             if line is None or not within_tol(line, target_line, tol):
                 continue
-        probs.append(float(e.get("fair_prob_in_book")) if "fair_prob_in_book" in e else implied_prob_american(int(e["price"])))
+
+        if "fair_prob_in_book" in e:
+            probs.append(float(e["fair_prob_in_book"]))
+        else:
+            probs.append(implied_prob_american(int(e["price"])))
+
     if not probs:
         return None, 0
+
     return consensus_probability_from_probs(probs), len(probs)
 
+
+# ---------- pick formatting / scoring ----------
+
+def format_pick(p: dict) -> str:
+    odds = f"({p['target_odds']:+d})"
+    line = "" if p.get("line") is None else f" {p['line']}"
+    return f"{p['player']} — {p['market']} — {p['side']}{line} {odds}"
+
+
+def why_line(p: dict) -> str:
+    imp = implied_prob_american(p["target_odds"])
+    edge = p["p_model"] - imp
+    return (
+        f"WHY: p_fair={p['p_model']:.3f} vs implied={imp:.3f} "
+        f"(edge={edge:+.3f}), EV=${p['ev']:.3f}/$1, books={p['books_count']}, Kelly~{p['kelly_frac']*100:.2f}%"
+    )
+
+
+def pick_score(p: dict) -> float:
+    imp = implied_prob_american(p["target_odds"])
+    edge = p["p_model"] - imp
+    # a stable “quality” score (not a guarantee)
+    return (p["ev"] * 100.0) + (edge * 60.0) + (min(p["books_count"], 10) * 0.5)
+
+
+def grade_pick(p: dict) -> float:
+    """
+    Mimic your friend's "grade" style (9.0+ etc).
+    This is just a rescaled quality score based on EV/edge/books.
+    """
+    s = pick_score(p)
+    # Map typical good range to ~7–10
+    g = 6.5 + (s / 25.0)
+    if g > 10.0:
+        g = 10.0
+    if g < 0.0:
+        g = 0.0
+    return g
+
+
+def select_top_unique_game(picks: list[dict], n: int) -> list[dict]:
+    out = []
+    seen = set()
+    for p in sorted(picks, key=pick_score, reverse=True):
+        if ONE_PICK_PER_GAME and p["event"] in seen:
+            continue
+        seen.add(p["event"])
+        out.append(p)
+        if len(out) >= n:
+            break
+    return out
+
+
+def build_parlay(picks: list[dict], legs: int, min_total_dec: float, max_total_dec: float):
+    if len(picks) < legs:
+        return None
+
+    chosen = []
+    used_events = set()
+    total_dec = 1.0
+
+    for p in sorted(picks, key=pick_score, reverse=True):
+        if ONE_PICK_PER_GAME and p["event"] in used_events:
+            continue
+        used_events.add(p["event"])
+        chosen.append(p)
+        total_dec *= american_to_decimal(int(p["target_odds"]))
+        if len(chosen) == legs:
+            break
+
+    if len(chosen) != legs:
+        return None
+
+    if not (min_total_dec <= total_dec <= max_total_dec):
+        return None
+
+    return {"legs": chosen, "dec": total_dec}
+
+
+# ---------- verification refresh ----------
 
 def verify_refresh(picks: list[dict], blocked: dict) -> list[dict]:
     if not picks or not VERIFY_BEFORE_SEND:
@@ -171,9 +299,12 @@ def verify_refresh(picks: list[dict], blocked: dict) -> list[dict]:
 
         for p in plist:
             best = None
+
             for e in idx.get((p["market"], p["player"], p["side"]), []):
                 if e["book"] not in TARGET_BOOKS:
                     continue
+
+                # exact line match if line present
                 if p.get("line") is None:
                     if e.get("line") is not None:
                         continue
@@ -188,7 +319,9 @@ def verify_refresh(picks: list[dict], blocked: dict) -> list[dict]:
                 p_model, books_count = consensus_prob(idx, p["market"], p["player"], p["side"], p.get("line"), LINE_TOLERANCE)
                 if p_model is None:
                     continue
+
                 ev_val = expected_value(p_model, odds_val)
+
                 if best is None or ev_val > best[0]:
                     best = (ev_val, e["book"], odds_val, p_model, books_count)
 
@@ -207,77 +340,55 @@ def verify_refresh(picks: list[dict], blocked: dict) -> list[dict]:
             p["books_count"] = int(books_count)
             p["ev"] = float(ev_val)
             p["kelly_frac"] = min(kelly_fraction(p["p_model"], p["target_odds"]), 0.01)
+
             verified.append(p)
 
     return verified
 
 
-def pick_score(p: dict) -> float:
-    imp = implied_prob_american(p["target_odds"])
-    edge = p["p_model"] - imp
-    return (p["ev"] * 100.0) + (edge * 50.0) + (min(p["books_count"], 10) * 0.4)
+# ---------- output helper (NO NESTED SCOPING BUG) ----------
 
+def emit_section(lines: list[str], title: str, stake_line: str, picks: list[dict], any_sent: bool) -> bool:
+    if not picks:
+        return any_sent
 
-def select_top_unique_game(picks: list[dict], n: int) -> list[dict]:
-    out = []
-    seen = set()
-    for p in sorted(picks, key=pick_score, reverse=True):
-        if ONE_PICK_PER_GAME and p["event"] in seen:
+    lines.append(title)
+    lines.append(stake_line)
+    lines.append("")
+
+    for p in picks:
+        key = f"{p['event']}|{p['market']}|{p['player']}|{p['side']}|{p.get('line')}|{p['target_book_used']}|{p['target_odds']}"
+        if was_sent_recently(key, COOLDOWN_MINUTES):
             continue
-        seen.add(p["event"])
-        out.append(p)
-        if len(out) >= n:
-            break
-    return out
 
+        mark_sent(key)
 
-def build_parlay(picks: list[dict], legs: int, min_total_dec: float, max_total_dec: float) -> dict | None:
-    if len(picks) < legs:
-        return None
-    chosen = []
-    used_events = set()
-    total_dec = 1.0
-    for p in sorted(picks, key=pick_score, reverse=True):
-        if ONE_PICK_PER_GAME and p["event"] in used_events:
-            continue
-        used_events.add(p["event"])
-        chosen.append(p)
-        total_dec *= american_to_decimal(int(p["target_odds"]))
-        if len(chosen) == legs:
-            break
-    if len(chosen) != legs:
-        return None
-    if not (min_total_dec <= total_dec <= max_total_dec):
-        return None
-    return {"legs": chosen, "dec": total_dec}
+        lines.extend([
+            f"• {format_pick(p)}",
+            f"  {p['event']}",
+            f"  Book={p['target_book_used']}",
+            f"  {why_line(p)}",
+            "",
+        ])
+        any_sent = True
 
-
-def format_pick(p: dict) -> str:
-    odds = f"({p['target_odds']:+d})"
-    line = "" if p.get("line") is None else f" {p['line']}"
-    return f"{p['player']} — {p['market']} — {p['side']}{line} {odds}"
-
-
-def why_line(p: dict) -> str:
-    imp = implied_prob_american(p["target_odds"])
-    edge = p["p_model"] - imp
-    return (
-        f"WHY: p_fair={p['p_model']:.3f} vs implied={imp:.3f} "
-        f"(edge={edge:+.3f}), EV=${p['ev']:.3f}/$1, books={p['books_count']}, Kelly~{p['kelly_frac']*100:.2f}%"
-    )
+    return any_sent
 
 
 def main() -> None:
     init_db()
+
     blocked = {"window": 0, "books": 0, "tier": 0, "api_fail": 0, "moved": 0}
-    event_calls = odds_calls = today_used = 0
+    event_calls = 0
+    odds_calls = 0
+    today_used = 0
 
     sharp_pool = []
     lotto_pool = []
     plus_pool = []
     highvar_pool = []
 
-    for sport in SPORTS:
+    for sport in SPORTS_NO_NHL:
         try:
             events = get_events(sport)
             event_calls += 1
@@ -302,8 +413,10 @@ def main() -> None:
             idx = normalize_event_index(odds)
             event_name = f"{ev.get('away_team','')} @ {ev.get('home_team','')}".strip(" @")
 
+            # evaluate each (market, player, side) and find best target book among TARGET_BOOKS
             for (market, participant, side), entries in idx.items():
                 best_exec = None
+
                 for e in entries:
                     if e["book"] not in TARGET_BOOKS:
                         continue
@@ -316,6 +429,7 @@ def main() -> None:
                         continue
 
                     ev_val = expected_value(p_model, odds_val)
+
                     if best_exec is None or ev_val > best_exec[0]:
                         best_exec = (ev_val, e["book"], odds_val, line, p_model, books_count)
 
@@ -329,6 +443,10 @@ def main() -> None:
                 # sanity cap to avoid “too good to be true”
                 if edge > MAX_EDGE_CAP:
                     blocked["tier"] += 1
+                    continue
+
+                # require line for Over/Under outcomes
+                if side in ("Over", "Under") and line is None:
                     continue
 
                 cand = {
@@ -347,114 +465,132 @@ def main() -> None:
                     "kelly_frac": min(kelly_fraction(p_model, odds_val), 0.01),
                 }
 
-                # require a line for OU
-                if cand["side"] in ("Over", "Under") and cand["line"] is None:
-                    continue
-
-                # --- SHARP gates (steady) ---
-                if SHARP_MIN_ODDS <= odds_val <= SHARP_MAX_ODDS and books_count >= SHARP_MIN_BOOKS and cand["p_model"] >= SHARP_MIN_P and edge >= SHARP_MIN_EDGE and cand["ev"] >= SHARP_MIN_EV:
+                # SHARP
+                if (SHARP_MIN_ODDS <= odds_val <= SHARP_MAX_ODDS
+                    and books_count >= SHARP_MIN_BOOKS
+                    and cand["p_model"] >= SHARP_MIN_P
+                    and edge >= SHARP_MIN_EDGE
+                    and cand["ev"] >= SHARP_MIN_EV):
                     s = dict(cand)
                     s["min_odds"] = SHARP_MIN_ODDS
                     s["max_odds"] = SHARP_MAX_ODDS
                     sharp_pool.append(s)
 
-                # --- LOTTO pool ---
+                # LOTTO
                 if ENABLE_LOTTO_3LEG:
-                    if LOTTO_MIN_ODDS <= odds_val <= LOTTO_MAX_ODDS and books_count >= LOTTO_MIN_BOOKS and edge >= LOTTO_MIN_EDGE and cand["ev"] >= LOTTO_MIN_EV:
+                    if (LOTTO_MIN_ODDS <= odds_val <= LOTTO_MAX_ODDS
+                        and books_count >= LOTTO_MIN_BOOKS
+                        and edge >= LOTTO_MIN_EDGE
+                        and cand["ev"] >= LOTTO_MIN_EV):
                         l = dict(cand)
                         l["min_odds"] = LOTTO_MIN_ODDS
                         l["max_odds"] = LOTTO_MAX_ODDS
                         lotto_pool.append(l)
 
-                # --- PLUS-MONEY bigger win pool ---
+                # PLUS-MONEY
                 if ENABLE_PLUS_SHOTS:
-                    if PLUS_MIN_ODDS <= odds_val <= PLUS_MAX_ODDS and books_count >= PLUS_MIN_BOOKS and edge >= PLUS_MIN_EDGE and cand["ev"] >= PLUS_MIN_EV:
+                    if (PLUS_MIN_ODDS <= odds_val <= PLUS_MAX_ODDS
+                        and books_count >= PLUS_MIN_BOOKS
+                        and edge >= PLUS_MIN_EDGE
+                        and cand["ev"] >= PLUS_MIN_EV):
                         p = dict(cand)
                         p["min_odds"] = PLUS_MIN_ODDS
                         p["max_odds"] = PLUS_MAX_ODDS
                         plus_pool.append(p)
 
-                # --- HIGH-VARIANCE parlay candidates ---
+                # HIGH VAR candidates
                 if ENABLE_HIGHVAR_3LEG:
-                    if HIGHVAR_MIN_ODDS <= odds_val <= HIGHVAR_MAX_ODDS and books_count >= max(PLUS_MIN_BOOKS, 4) and edge >= max(PLUS_MIN_EDGE, 0.016) and cand["ev"] >= max(PLUS_MIN_EV, 0.012):
+                    if (HIGHVAR_MIN_ODDS <= odds_val <= HIGHVAR_MAX_ODDS
+                        and books_count >= max(4, PLUS_MIN_BOOKS)
+                        and edge >= max(0.016, PLUS_MIN_EDGE)
+                        and cand["ev"] >= max(0.012, PLUS_MIN_EV)):
                         hv = dict(cand)
                         hv["min_odds"] = HIGHVAR_MIN_ODDS
                         hv["max_odds"] = HIGHVAR_MAX_ODDS
                         highvar_pool.append(hv)
 
-    # picks
+    # Select & verify
     sharp = verify_refresh(select_top_unique_game(sharp_pool, SHARP_MAX_SINGLES), blocked)
 
     plus = []
     if ENABLE_PLUS_SHOTS:
         plus = verify_refresh(select_top_unique_game(plus_pool, PLUS_MAX_PICKS), blocked)
 
-    # sharp builder uses sharp only
     sharp_builder = None
     if ENABLE_SHARP_BUILDER and len(sharp) >= BUILDER_LEGS:
         sharp_builder = build_parlay(sharp, BUILDER_LEGS, BUILDER_MIN_DEC, BUILDER_MAX_DEC)
 
-    # lotto builder (optional)
     lotto = None
     if ENABLE_LOTTO_3LEG:
-        lotto = build_parlay(select_top_unique_game(lotto_pool, 12), LOTTO_LEGS, 1.01, LOTTO_MAX_TOTAL_DEC)
+        lotto = build_parlay(select_top_unique_game(lotto_pool, 14), LOTTO_LEGS, 1.01, LOTTO_MAX_TOTAL_DEC)
         if lotto:
             lotto["legs"] = verify_refresh(lotto["legs"], blocked)
 
-    # high-variance 3 leg (built from highvar pool)
     highvar = None
     if ENABLE_HIGHVAR_3LEG:
-        highvar = build_parlay(select_top_unique_game(highvar_pool, 18), HIGHVAR_LEGS, HIGHVAR_MIN_TOTAL_DEC, HIGHVAR_MAX_TOTAL_DEC)
+        highvar = build_parlay(select_top_unique_game(highvar_pool, 20), HIGHVAR_LEGS, HIGHVAR_MIN_TOTAL_DEC, HIGHVAR_MAX_TOTAL_DEC)
         if highvar:
             highvar["legs"] = verify_refresh(highvar["legs"], blocked)
 
+    # Message header
     eastern = tz.gettz("America/New_York")
     now = datetime.now(tz=eastern).strftime("%a %b %d %I:%M %p ET")
 
     lines = []
-    lines += ["✅ SHARP MODE — Today Only", f"{now}", ""]
+    lines.append("✅ SHARP MODE — Today Only")
+    lines.append(now)
+    lines.append("")
 
     any_sent = False
 
-    def maybe_emit_section(title: str, picks: list[dict], stake_line: str):
-    nonlocal any_sent
-    if not picks:
-        return
+    # ELITE section: if any pick grades >= 9.0 (from sharp + plus combined)
+    elite_candidates = sorted((sharp + plus), key=grade_pick, reverse=True)
+    elite = [p for p in elite_candidates if grade_pick(p) >= 9.0][:2]
 
-    lines.append(title)
-    lines.append(stake_line)
-    lines.append("")
-
-    for p in picks:
-        key = f"{p['event']}|{p['market']}|{p['player']}|{p['side']}|{p.get('line')}|{p['target_book_used']}|{p['target_odds']}"
-        if was_sent_recently(key, COOLDOWN_MINUTES):
-            continue
-        mark_sent(key)
-
-        lines.extend([
-            f"• {format_pick(p)}",
-            f"  {p['event']}",
-            f"  Book={p['target_book_used']}",
-            f"  {why_line(p)}",
-            "",
-        ])
+    if elite:
+        lines.append("🏆 ELITE PLAYS (Grade 9.0+)")
+        lines.append("")
+        for i, p in enumerate(elite, start=1):
+            g = grade_pick(p)
+            lines.extend([
+                f"{i}. {format_pick(p)} — Grade: {g:.1f}",
+                f"   {p['event']} | Book={p['target_book_used']}",
+                f"   {why_line(p)}",
+                "",
+            ])
         any_sent = True
 
-
-    maybe_emit_section("🟢 SHARP SINGLES", sharp, "Stake guide: ~0.75–1.0% bankroll each")
+    # Regular sections
+    any_sent = emit_section(
+        lines,
+        "🟢 SHARP SINGLES",
+        "Stake guide: ~0.75–1.0% bankroll each",
+        sharp,
+        any_sent
+    )
 
     if sharp_builder:
-        lines += ["🟣 SHARP PARLAY BUILDER (from SHARP singles only)", "Stake guide: 0.10–0.25% bankroll (small)", ""]
+        lines.append("🟣 SHARP PARLAY BUILDER (from SHARP singles only)")
+        lines.append("Stake guide: 0.10–0.25% bankroll (small)")
+        lines.append("")
         lines.append(f"Total decimal ≈ {sharp_builder['dec']:.2f}")
         for leg in sharp_builder["legs"]:
             lines.append(f"- {format_pick(leg)}")
         lines.append("")
         any_sent = True
 
-    maybe_emit_section("🟠 PLUS-MONEY SHOTS (bigger win, higher variance)", plus, "Stake guide: 0.25–0.50% bankroll (smaller)")
+    any_sent = emit_section(
+        lines,
+        "🟠 PLUS-MONEY SHOTS (bigger win, higher variance)",
+        "Stake guide: 0.25–0.50% bankroll (smaller)",
+        plus,
+        any_sent
+    )
 
     if highvar:
-        lines += ["🔥 HIGH-VARIANCE 3-LEG (bigger payout)", "Stake guide: 0.05–0.15% bankroll (tiny)", ""]
+        lines.append("🔥 HIGH-VARIANCE 3-LEG (bigger payout)")
+        lines.append("Stake guide: 0.05–0.15% bankroll (tiny)")
+        lines.append("")
         lines.append(f"Total decimal ≈ {highvar['dec']:.2f}")
         for leg in highvar["legs"]:
             lines.append(f"- {format_pick(leg)}")
@@ -462,8 +598,9 @@ def main() -> None:
         any_sent = True
 
     if lotto:
-        # keep lotto as “fun” optional
-        lines += ["🎲 LOTTO 3-LEG (optional fun)", "Stake guide: 0.05–0.10% bankroll (tiny)", ""]
+        lines.append("🎲 LOTTO 3-LEG (optional fun)")
+        lines.append("Stake guide: 0.05–0.10% bankroll (tiny)")
+        lines.append("")
         dec = 1.0
         for leg in lotto["legs"]:
             dec *= american_to_decimal(int(leg["target_odds"]))
@@ -474,16 +611,16 @@ def main() -> None:
         any_sent = True
 
     if not any_sent:
-        lines += ["No SHARP/PLUS picks right now. Best move is no bet.", ""]
+        lines.append("No qualified picks right now. Best move is no bet.")
+        lines.append("")
 
-    lines += [
-        f"API calls: events={event_calls}, event-odds={odds_calls} (today events used={today_used})",
-        f"Blocked: window={blocked['window']}, books={blocked['books']}, tier={blocked['tier']}, api_fail={blocked['api_fail']}, moved={blocked['moved']}",
-        "🔎 Not guarantees — higher payout = higher variance. Keep stakes small on plus-money/parlays.",
-    ]
+    lines.append(f"API calls: events={event_calls}, event-odds={odds_calls} (today events used={today_used})")
+    lines.append(f"Blocked: tier={blocked['tier']}, api_fail={blocked['api_fail']}, moved={blocked['moved']}")
+    lines.append("🔎 Not guarantees — higher payout = higher variance. Keep plus/parlay stakes small.")
 
     send_telegram("\n".join(lines))
 
 
 if __name__ == "__main__":
+    init_db()
     main()
